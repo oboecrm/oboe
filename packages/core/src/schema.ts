@@ -1,0 +1,64 @@
+import type {
+  CompiledCollection,
+  CompiledSchema,
+  ModuleConfig,
+  OboeConfig,
+} from "./types.js";
+
+function assertUnique(slug: string, seen: Set<string>, label: string) {
+  if (seen.has(slug)) {
+    throw new Error(`Duplicate ${label} slug "${slug}" detected.`);
+  }
+
+  seen.add(slug);
+}
+
+export function compileSchema(config: OboeConfig): CompiledSchema {
+  const moduleSlugs = new Set<string>();
+  const collectionSlugs = new Set<string>();
+  const globalSlugs = new Set<string>();
+  const modules = new Map<string, ModuleConfig>();
+  const collections = new Map<string, CompiledCollection>();
+  const globals = new Map();
+
+  for (const moduleConfig of config.modules) {
+    assertUnique(moduleConfig.slug, moduleSlugs, "module");
+    modules.set(moduleConfig.slug, moduleConfig);
+
+    for (const collection of moduleConfig.collections) {
+      assertUnique(collection.slug, collectionSlugs, "collection");
+      collections.set(collection.slug, {
+        ...collection,
+        admin: {
+          ...collection.admin,
+          views: {
+            ...config.admin?.views,
+            ...collection.admin?.views,
+          },
+        },
+        moduleSlug: moduleConfig.slug,
+      });
+    }
+
+    for (const global of moduleConfig.globals ?? []) {
+      assertUnique(global.slug, globalSlugs, "global");
+      globals.set(global.slug, global);
+    }
+  }
+
+  return {
+    collections,
+    config,
+    globals,
+    modules,
+  };
+}
+
+export function getCompiledCollection(schema: CompiledSchema, slug: string) {
+  const collection = schema.collections.get(slug);
+  if (!collection) {
+    throw new Error(`Unknown collection "${slug}".`);
+  }
+
+  return collection;
+}

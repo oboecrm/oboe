@@ -1,0 +1,23 @@
+{
+  "name": "@oboe/studio",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "build": "next build",
+    "dev": "next dev",
+    "lint": "tsc -p tsconfig.json --noEmit",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@oboe/admin-next": "workspace:*",
+    "@oboe/core": "workspace:*",
+    "@oboe/db-postgres": "workspace:*",
+    "@oboe/graphql": "workspace:*",
+    "@oboe/http": "workspace:*",
+    "@oboe/jobs": "workspace:*",
+    "next": "^15.2.2",
+    "pg": "^8.13.3",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": ".",
+    "baseUrl": ".",
+    "paths": {
+      "@oboe/core": ["./src/index.ts"],
+      "@oboe/core/testing": ["./src/testing/index.ts"]
+    }
+  },
+  "include": ["src/**/*.ts"]
+}

@@ -1,0 +1,28 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "allowJs": true,
+    "baseUrl": ".",
+    "incremental": true,
+    "jsx": "preserve",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "noEmit": true,
+    "paths": {
+      "@oboe/admin-next": ["../../packages/admin-next/src/index.tsx"],
+      "@oboe/core": ["../../packages/core/src/index.ts"],
+      "@oboe/core/testing": ["../../packages/core/src/testing/index.ts"],
+      "@oboe/db-postgres": ["../../packages/db-postgres/src/index.ts"],
+      "@oboe/graphql": ["../../packages/graphql/src/index.ts"],
+      "@oboe/http": ["../../packages/http/src/index.ts"],
+      "@oboe/jobs": ["../../packages/jobs/src/index.ts"]
+    },
+    "plugins": [
+      {
+        "name": "next"
+      }
+    ]
+  },
+  "include": ["next-env.d.ts", "**/*.ts", "**/*.tsx", ".next/types/**/*.ts"],
+  "exclude": ["node_modules"]
+}
