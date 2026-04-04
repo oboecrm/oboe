@@ -5,5 +5,8 @@ export default defineWorkspace([
   "packages/http/vitest.config.ts",
   "packages/graphql/vitest.config.ts",
   "packages/jobs/vitest.config.ts",
+  "packages/storage-relational/vitest.config.ts",
   "packages/db-postgres/vitest.config.ts",
+  "packages/db-mysql/vitest.config.ts",
+  "packages/db-sqlite/vitest.config.ts",
 ]);

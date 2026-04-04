@@ -29,7 +29,9 @@ OboeCRM is early, but the architecture is already shaped around the v1 concept:
 - `@oboe/http` mounts REST on top of the shared runtime
 - `@oboe/graphql` mounts GraphQL on top of the shared runtime
 - `@oboe/admin-next` renders generated admin views and CRM-specific screens
-- `@oboe/db-postgres` is the first official database adapter
+- `@oboe/storage-relational` provides the shared relational storage and migration layer
+- `@oboe/db-postgres`, `@oboe/db-mysql`, and `@oboe/db-sqlite` are the official relational adapters
+- `@oboe/cli` owns schema migration and `db:push` workflows
 - `@oboe/jobs` handles retry-aware background work and webhook-style flows
 - `apps/studio` is the official Next.js shell for admin, API, and GraphQL
 
@@ -42,7 +44,7 @@ Before running the studio locally, make sure you have:
 
 - Node.js 22+
 - pnpm 10+
-- a reachable PostgreSQL database
+- a reachable PostgreSQL, MySQL 8+, or SQLite database
 
 Install dependencies:
 
@@ -55,6 +57,14 @@ Set a database URL and start the workspace:
 ```bash
 export DATABASE_URL=postgres://postgres:postgres@localhost:5432/oboe
 pnpm dev
+```
+
+To generate or apply relational schema migrations through Oboe:
+
+```bash
+pnpm --filter @oboe/cli build
+pnpm exec oboe migrate:generate --dialect postgres --config apps/studio/oboe.config.ts
+pnpm exec oboe migrate --dialect postgres --config apps/studio/oboe.config.ts --url "$DATABASE_URL"
 ```
 
 Then open:
@@ -115,7 +125,11 @@ This repository is a `pnpm + Turborepo` monorepo.
 
 - [`apps/studio`](./apps/studio): official Next.js admin shell
 - [`packages/core`](./packages/core): config DSL, schema compiler, Local API, hooks, access, events
-- [`packages/db-postgres`](./packages/db-postgres): Postgres adapter and bootstrap SQL
+- [`packages/storage-relational`](./packages/storage-relational): shared relational manifests, migrations, and storage behavior
+- [`packages/db-postgres`](./packages/db-postgres): Postgres adapter
+- [`packages/db-mysql`](./packages/db-mysql): MySQL 8+ adapter
+- [`packages/db-sqlite`](./packages/db-sqlite): SQLite adapter
+- [`packages/cli`](./packages/cli): `oboe migrate` and `oboe db:push`
 - [`packages/http`](./packages/http): fetch-native REST handler
 - [`packages/graphql`](./packages/graphql): GraphQL schema and executor
 - [`packages/admin-next`](./packages/admin-next): generated admin React components and CRM view slots
@@ -130,10 +144,12 @@ The current implementation already includes:
 - `defineConfig()` and `defineModule()` for CRM modeling
 - schema compilation and a shared runtime for Local API behavior
 - REST and GraphQL mounted on top of the same runtime
-- a Postgres-first adapter with audit log and job outbox tables
+- a shared relational storage layer with migration metadata
+- official Postgres, MySQL, and SQLite adapters
+- an Oboe CLI for migration generation, apply, status, and `db:push`
 - generated admin collection screens
 - custom CRM-oriented views such as pipeline, timeline, and activity composer
-- basic tests covering core runtime, HTTP, GraphQL, jobs, and Postgres adapter behavior
+- basic tests covering core runtime, HTTP, GraphQL, jobs, and relational adapter behavior
 
 ## Scripts
 

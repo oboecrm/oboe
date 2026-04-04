@@ -1,5 +1,5 @@
 {
-  "name": "@oboe/db-postgres",
+  "name": "@oboe/storage-relational",
   "version": "0.1.0",
   "type": "module",
   "main": "./dist/index.js",
@@ -11,10 +11,7 @@
     }
   },
   "dependencies": {
-    "@oboe/core": "workspace:*",
-    "@oboe/storage-relational": "workspace:*",
-    "drizzle-orm": "^0.45.2",
-    "pg": "^8.13.3"
+    "@oboe/core": "workspace:*"
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",

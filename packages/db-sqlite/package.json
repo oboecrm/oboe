@@ -1,5 +1,5 @@
 {
-  "name": "@oboe/db-postgres",
+  "name": "@oboe/db-sqlite",
   "version": "0.1.0",
   "type": "module",
   "main": "./dist/index.js",
@@ -13,8 +13,11 @@
   "dependencies": {
     "@oboe/core": "workspace:*",
     "@oboe/storage-relational": "workspace:*",
-    "drizzle-orm": "^0.45.2",
-    "pg": "^8.13.3"
+    "better-sqlite3": "^11.10.0",
+    "drizzle-orm": "^0.45.2"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.12"
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",

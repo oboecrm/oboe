@@ -1,3 +1,4 @@
+import { compileSchema, defineConfig, defineModule } from "@oboe/core";
 import { expect, it } from "vitest";
 
 import { bootstrapSql, createPostgresAdapter } from "./index.js";
@@ -9,11 +10,7 @@ it("boots schema and uses JSONB-based CRUD statements", async () => {
       async query(text: string, values?: unknown[]) {
         statements.push({ text, values });
 
-        if (
-          text.includes(
-            "RETURNING id, collection, data, created_at, updated_at"
-          )
-        ) {
+        if (text.includes('insert into "oboe_records"')) {
           return {
             command: "SELECT",
             fieldCount: 0,
@@ -46,7 +43,18 @@ it("boots schema and uses JSONB-based CRUD statements", async () => {
     },
   });
 
-  await adapter.initialize({} as never);
+  await adapter.initialize(
+    compileSchema(
+      defineConfig({
+        modules: [
+          defineModule({
+            collections: [],
+            slug: "crm",
+          }),
+        ],
+      })
+    )
+  );
   await adapter.create({
     collection: "contacts",
     data: {
@@ -69,8 +77,23 @@ it("boots schema and uses JSONB-based CRUD statements", async () => {
     },
   });
 
-  expect(statements[0]?.text).toContain(bootstrapSql.trim());
-  expect(statements[1]?.text).toContain("INSERT INTO oboe_records");
-  expect(statements[2]?.text).toContain("data @> $2::jsonb");
-  expect(statements[3]?.text).toContain("INSERT INTO oboe_job_outbox");
+  expect(
+    statements.some((statement) => statement.text.includes("oboe_migrations"))
+  ).toBe(true);
+  expect(
+    statements.some((statement) =>
+      statement.text.includes('insert into "oboe_records"')
+    )
+  ).toBe(true);
+  expect(
+    statements.some((statement) =>
+      statement.text.includes('"data" @> $2::jsonb')
+    )
+  ).toBe(true);
+  expect(
+    statements.some((statement) =>
+      statement.text.includes('insert into "oboe_job_outbox"')
+    )
+  ).toBe(true);
+  expect(bootstrapSql).toContain("CREATE TABLE IF NOT EXISTS oboe_migrations");
 });
