@@ -253,11 +253,14 @@ async function createQueryable(options: CliOptions): Promise<{
     queryable: (() => {
       let queryable!: RelationalQueryable;
       queryable = {
-        query: async ({ params, sql }) => {
+        query: async <TRow = Record<string, unknown>>({
+          params,
+          sql,
+        }: RelationalStatement) => {
           const statement = database.prepare(sql);
           if (sql.trim().toLowerCase().startsWith("select")) {
             return {
-              rows: statement.all(...params),
+              rows: statement.all(...params) as TRow[],
             };
           }
 
@@ -265,7 +268,7 @@ async function createQueryable(options: CliOptions): Promise<{
           return {
             affectedRows: result.changes,
             lastInsertId: result.lastInsertRowid,
-            rows: [],
+            rows: [] as TRow[],
           };
         },
         transaction: async (callback) => {
