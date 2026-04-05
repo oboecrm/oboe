@@ -1,5 +1,5 @@
-import type { CompiledSchema, FieldConfig } from "@oboe/core";
 import { createHash } from "node:crypto";
+import type { CompiledSchema, FieldConfig } from "@oboe/core";
 
 import type { RelationalManifest } from "./types.js";
 

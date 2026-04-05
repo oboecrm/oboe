@@ -18,7 +18,7 @@ export type {
   RelationalInitializationOptions,
   RelationalManifest,
   RelationalMigration,
-  RelationalQueryResult,
   RelationalQueryable,
+  RelationalQueryResult,
   RelationalStatement,
 } from "./types.js";

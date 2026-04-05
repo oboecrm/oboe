@@ -19,13 +19,19 @@ it("builds mysql-compatible statements through the adapter", async () => {
           return [{ affectedRows: 1, insertId: 1 }, undefined];
         }
 
-        if (sql.startsWith("select `collection`, `created_at`, `data`, `id`, `updated_at` from `oboe_records`")) {
+        if (
+          sql.startsWith(
+            "select `collection`, `created_at`, `data`, `id`, `updated_at` from `oboe_records`"
+          )
+        ) {
           return [
             [
               {
                 collection: "contacts",
                 created_at: "2026-04-04 00:00:00",
-                data: rows.values().next().value?.data ?? JSON.stringify({ name: "Oboe Dev" }),
+                data:
+                  rows.values().next().value?.data ??
+                  JSON.stringify({ name: "Oboe Dev" }),
                 id: rows.values().next().value?.id ?? "contact-1",
                 updated_at: "2026-04-04 00:00:00",
               },

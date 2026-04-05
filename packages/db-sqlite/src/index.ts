@@ -8,12 +8,11 @@ import type {
 } from "@oboe/core";
 import type { RelationalQueryable } from "@oboe/storage-relational";
 import { RelationalStorage } from "@oboe/storage-relational";
-import Database from "better-sqlite3";
+import type Database from "better-sqlite3";
 
-import { bootstrapSql, sqliteDialect } from "./dialect.js";
+import { sqliteDialect } from "./dialect.js";
 
-export { bootstrapSql } from "./dialect.js";
-export { sqliteDialect } from "./dialect.js";
+export { bootstrapSql, sqliteDialect } from "./dialect.js";
 
 export interface SqliteDatabaseLike {
   exec: (sql: string) => unknown;
@@ -59,10 +58,14 @@ function createQueryable(
         rows: [] as TRow[],
       };
     },
-    transaction: async <T>(callback: (queryable: RelationalQueryable) => Promise<T>) => {
-      const run = (database.transaction as unknown as <TReturn>(
-        fn: () => Promise<TReturn>
-      ) => () => Promise<TReturn>)(() => callback(queryable));
+    transaction: async <T>(
+      callback: (queryable: RelationalQueryable) => Promise<T>
+    ) => {
+      const run = (
+        database.transaction as unknown as <TReturn>(
+          fn: () => Promise<TReturn>
+        ) => () => Promise<TReturn>
+      )(() => callback(queryable));
       return await run();
     },
   };
@@ -76,7 +79,10 @@ export class SqliteAdapter implements DatabaseAdapter {
 
   constructor(options: SqliteAdapterOptions) {
     this.database = options.database;
-    this.storage = new RelationalStorage(sqliteDialect, createQueryable(options.database));
+    this.storage = new RelationalStorage(
+      sqliteDialect,
+      createQueryable(options.database)
+    );
   }
 
   async create(args: {
@@ -122,9 +128,11 @@ export class SqliteAdapter implements DatabaseAdapter {
   async transaction<T>(
     callback: (adapter: DatabaseAdapter) => Promise<T>
   ): Promise<T> {
-    const run = (this.database.transaction as unknown as <TReturn>(
-      fn: () => Promise<TReturn>
-    ) => () => Promise<TReturn>)(() => callback(this));
+    const run = (
+      this.database.transaction as unknown as <TReturn>(
+        fn: () => Promise<TReturn>
+      ) => () => Promise<TReturn>
+    )(() => callback(this));
     return await run();
   }
 

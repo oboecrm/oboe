@@ -2,16 +2,121 @@ export type FieldType =
   | "text"
   | "textarea"
   | "email"
+  | "json"
   | "number"
   | "boolean"
   | "date"
   | "select"
-  | "relation";
+  | "relation"
+  | "relationship";
 
 export interface BaseFieldConfig {
   label?: string;
   name: string;
   required?: boolean;
+}
+
+export interface ValidationIssue {
+  message: string;
+  path?: PropertyKey[];
+}
+
+export type ValidationIssueResult =
+  | string
+  | ValidationIssue
+  | ValidationIssue[]
+  | null
+  | undefined;
+
+export interface SchemaParseSuccess<TValue = unknown> {
+  issues?: undefined;
+  value: TValue;
+}
+
+export interface SchemaParseFailure {
+  issues: ValidationIssue[];
+  value?: unknown;
+}
+
+export type SchemaParseResult<TValue = unknown> =
+  | SchemaParseSuccess<TValue>
+  | SchemaParseFailure;
+
+export interface SchemaAdapter<TContext = unknown, TValue = unknown> {
+  parse: (
+    value: unknown,
+    context: TContext
+  ) => SchemaParseResult<TValue> | Promise<SchemaParseResult<TValue>>;
+}
+
+export interface StandardSchemaIssue {
+  message: string;
+  path?: Array<
+    | PropertyKey
+    | {
+        key?: PropertyKey;
+        path?: PropertyKey;
+      }
+  >;
+}
+
+export interface StandardSchemaLike<TValue = unknown> {
+  "~standard": {
+    validate: (
+      value: unknown,
+      options?: Record<string, unknown>
+    ) =>
+      | Promise<{ issues: StandardSchemaIssue[] } | { value: TValue }>
+      | { issues: StandardSchemaIssue[] }
+      | { value: TValue };
+  };
+}
+
+export interface FieldValidationContext {
+  collection: CollectionConfig;
+  data: Record<string, unknown>;
+  field: FieldConfig;
+  operation: Exclude<CollectionOperation, "delete" | "read">;
+  originalDoc?: OboeRecord | null;
+  req?: Request;
+  user?: unknown;
+}
+
+export interface CollectionValidationContext {
+  collection: CollectionConfig;
+  data: Record<string, unknown>;
+  operation: Exclude<CollectionOperation, "delete" | "read">;
+  originalDoc?: OboeRecord | null;
+  req?: Request;
+  user?: unknown;
+}
+
+export type FieldSchema =
+  | SchemaAdapter<FieldValidationContext>
+  | StandardSchemaLike;
+
+export type CollectionSchema =
+  | SchemaAdapter<CollectionValidationContext, Record<string, unknown>>
+  | StandardSchemaLike<Record<string, unknown>>;
+
+export type FieldValidator = (args: {
+  context: FieldValidationContext;
+  value: unknown;
+}) => ValidationIssueResult | Promise<ValidationIssueResult>;
+
+export type CollectionValidator = (args: {
+  context: CollectionValidationContext;
+  data: Record<string, unknown>;
+}) => ValidationIssueResult | Promise<ValidationIssueResult>;
+
+export class OboeValidationError extends Error {
+  readonly issues: ValidationIssue[];
+
+  constructor(issues: ValidationIssue[], message = "Validation failed") {
+    super(message);
+    this.name = "OboeValidationError";
+    this.issues = issues;
+  }
 }
 
 export interface SelectFieldOption {
@@ -22,7 +127,9 @@ export interface SelectFieldOption {
 export interface FieldConfig extends BaseFieldConfig {
   options?: SelectFieldOption[];
   relationTo?: string;
+  schema?: FieldSchema;
   type: FieldType;
+  validate?: FieldValidator;
 }
 
 export interface AdminViewConfig {
@@ -95,7 +202,9 @@ export interface CollectionConfig {
     plural?: string;
     singular?: string;
   };
+  schema?: CollectionSchema;
   slug: string;
+  validate?: CollectionValidator;
 }
 
 export interface GlobalConfig {

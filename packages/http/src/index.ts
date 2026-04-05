@@ -1,4 +1,8 @@
-import type { CollectionQuery, OboeRuntime } from "@oboe/core";
+import {
+  type CollectionQuery,
+  type OboeRuntime,
+  OboeValidationError,
+} from "@oboe/core";
 
 export interface HttpHandlerOptions {
   basePath?: string;
@@ -36,83 +40,97 @@ export function createHttpHandler(options: HttpHandlerOptions) {
   const basePath = options.basePath ?? "/api";
 
   return async function handle(request: Request) {
-    const url = new URL(request.url);
-    const segments = normalizeSegments(url, basePath);
-    const [first, second] = segments;
+    try {
+      const url = new URL(request.url);
+      const segments = normalizeSegments(url, basePath);
+      const [first, second] = segments;
 
-    if (first === "health") {
-      return json({
-        status: "ok",
-      });
-    }
+      if (first === "health") {
+        return json({
+          status: "ok",
+        });
+      }
 
-    if (!first) {
+      if (!first) {
+        return json(
+          {
+            collections: [...options.runtime.schema.collections.keys()],
+          },
+          200
+        );
+      }
+
+      if (request.method === "GET" && !second) {
+        const docs = await options.runtime.find({
+          collection: first,
+          query: parseCollectionQuery(url),
+          req: request,
+        });
+        return json({
+          docs,
+        });
+      }
+
+      if (request.method === "POST" && !second) {
+        const body = (await request.json()) as Record<string, unknown>;
+        const doc = await options.runtime.create({
+          collection: first,
+          data: body,
+          req: request,
+        });
+        return json(doc, 201);
+      }
+
+      if (request.method === "GET" && second) {
+        const doc = await options.runtime.findById({
+          collection: first,
+          id: second,
+          req: request,
+        });
+
+        return doc ? json(doc) : json({ error: "Not found" }, 404);
+      }
+
+      if ((request.method === "PATCH" || request.method === "PUT") && second) {
+        const body = (await request.json()) as Record<string, unknown>;
+        const doc = await options.runtime.update({
+          collection: first,
+          data: body,
+          id: second,
+          req: request,
+        });
+
+        return doc ? json(doc) : json({ error: "Not found" }, 404);
+      }
+
+      if (request.method === "DELETE" && second) {
+        const doc = await options.runtime.delete({
+          collection: first,
+          id: second,
+          req: request,
+        });
+
+        return doc ? json(doc) : json({ error: "Not found" }, 404);
+      }
+
       return json(
         {
-          collections: [...options.runtime.schema.collections.keys()],
+          error: "Unsupported route",
         },
-        200
+        404
       );
+    } catch (error) {
+      if (error instanceof OboeValidationError) {
+        return json(
+          {
+            error: error.message,
+            issues: error.issues,
+          },
+          400
+        );
+      }
+
+      throw error;
     }
-
-    if (request.method === "GET" && !second) {
-      const docs = await options.runtime.find({
-        collection: first,
-        query: parseCollectionQuery(url),
-        req: request,
-      });
-      return json({
-        docs,
-      });
-    }
-
-    if (request.method === "POST" && !second) {
-      const body = (await request.json()) as Record<string, unknown>;
-      const doc = await options.runtime.create({
-        collection: first,
-        data: body,
-        req: request,
-      });
-      return json(doc, 201);
-    }
-
-    if (request.method === "GET" && second) {
-      const doc = await options.runtime.findById({
-        collection: first,
-        id: second,
-        req: request,
-      });
-
-      return doc ? json(doc) : json({ error: "Not found" }, 404);
-    }
-
-    if ((request.method === "PATCH" || request.method === "PUT") && second) {
-      const body = (await request.json()) as Record<string, unknown>;
-      const doc = await options.runtime.update({
-        collection: first,
-        data: body,
-        id: second,
-        req: request,
-      });
-
-      return doc ? json(doc) : json({ error: "Not found" }, 404);
-    }
-
-    if (request.method === "DELETE" && second) {
-      const doc = await options.runtime.delete({
-        collection: first,
-        id: second,
-        req: request,
-      });
-
-      return doc ? json(doc) : json({ error: "Not found" }, 404);
-    }
-
-    return json(
-      {
-        error: "Unsupported route",
-      },
-      404
-    );
   };
 }

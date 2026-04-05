@@ -6,10 +6,10 @@ import type {
 } from "@oboe/storage-relational";
 import { and, desc, eq, sql } from "drizzle-orm";
 import {
-  QueryBuilder,
-  SQLiteSyncDialect,
   index,
   integer,
+  QueryBuilder,
+  SQLiteSyncDialect,
   sqliteTable,
   text,
   uniqueIndex,
@@ -30,7 +30,9 @@ const oboeRecords = sqliteTable(
     id: text("id").primaryKey(),
     collection: text("collection").notNull(),
     createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
-    data: text("data", { mode: "json" }).$type<Record<string, unknown>>().notNull(),
+    data: text("data", { mode: "json" })
+      .$type<Record<string, unknown>>()
+      .notNull(),
     updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
   },
   (table) => [index("oboe_records_collection_idx").on(table.collection)]
@@ -66,7 +68,9 @@ const oboeMigrations = sqliteTable("oboe_migrations", {
   appliedAt: text("applied_at").notNull().default(sql`CURRENT_TIMESTAMP`),
   dialect: text("dialect").notNull(),
   id: text("id").primaryKey(),
-  manifest: text("manifest", { mode: "json" }).$type<Record<string, unknown>>().notNull(),
+  manifest: text("manifest", { mode: "json" })
+    .$type<Record<string, unknown>>()
+    .notNull(),
   manifestChecksum: text("manifest_checksum").notNull(),
   name: text("name").notNull(),
 });
@@ -79,7 +83,10 @@ const recordSelection = {
   updated_at: oboeRecords.updatedAt,
 };
 
-function toStatement(statement: { params: unknown[]; sql: string }): RelationalStatement {
+function toStatement(statement: {
+  params: unknown[];
+  sql: string;
+}): RelationalStatement {
   return {
     params: statement.params,
     sql: statement.sql,
@@ -177,7 +184,12 @@ export const sqliteDialect: RelationalDialect = {
   buildDeleteRecordStatement(args) {
     return toStatement(
       new SQLiteDeleteBase(oboeRecords, session, dialect)
-        .where(and(eq(oboeRecords.collection, args.collection), eq(oboeRecords.id, args.id)))
+        .where(
+          and(
+            eq(oboeRecords.collection, args.collection),
+            eq(oboeRecords.id, args.id)
+          )
+        )
         .toSQL()
     );
   },
@@ -199,7 +211,12 @@ export const sqliteDialect: RelationalDialect = {
       queryBuilder
         .select(recordSelection)
         .from(oboeRecords)
-        .where(and(eq(oboeRecords.collection, args.collection), eq(oboeRecords.id, args.id)))
+        .where(
+          and(
+            eq(oboeRecords.collection, args.collection),
+            eq(oboeRecords.id, args.id)
+          )
+        )
         .toSQL()
     );
   },
@@ -277,7 +294,12 @@ export const sqliteDialect: RelationalDialect = {
           data: sql`json_patch(${oboeRecords.data}, json(${JSON.stringify(args.data)}))`,
           updatedAt: sql`CURRENT_TIMESTAMP`,
         })
-        .where(and(eq(oboeRecords.collection, args.collection), eq(oboeRecords.id, args.id)))
+        .where(
+          and(
+            eq(oboeRecords.collection, args.collection),
+            eq(oboeRecords.id, args.id)
+          )
+        )
         .toSQL()
     );
   },

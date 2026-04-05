@@ -8,10 +8,9 @@ import type {
 } from "@oboe/core";
 import { RelationalStorage } from "@oboe/storage-relational";
 
-import { bootstrapSql, mySqlDialect } from "./dialect.js";
+import { mySqlDialect } from "./dialect.js";
 
-export { bootstrapSql } from "./dialect.js";
-export { mySqlDialect } from "./dialect.js";
+export { bootstrapSql, mySqlDialect } from "./dialect.js";
 
 interface ResultLike {
   affectedRows?: number;
@@ -63,10 +62,10 @@ function createQueryable(client: MySqlClientLike) {
     query: async <TRow = Record<string, unknown>>({
       params,
       sql,
-      }: {
-        params: unknown[];
-        sql: string;
-      }) => {
+    }: {
+      params: unknown[];
+      sql: string;
+    }) => {
       const [rows] = await client.execute(sql, params as never);
       if (Array.isArray(rows)) {
         return {
@@ -89,7 +88,10 @@ export class MySqlAdapter implements DatabaseAdapter {
 
   constructor(options: MySqlAdapterOptions) {
     this.client = options.client;
-    this.storage = new RelationalStorage(mySqlDialect, createQueryable(options.client));
+    this.storage = new RelationalStorage(
+      mySqlDialect,
+      createQueryable(options.client)
+    );
   }
 
   async create(args: {
@@ -139,7 +141,9 @@ export class MySqlAdapter implements DatabaseAdapter {
       if (hasTransactionMethods(this.client)) {
         await this.client.beginTransaction();
         try {
-          const result = await callback(new MySqlAdapter({ client: this.client }));
+          const result = await callback(
+            new MySqlAdapter({ client: this.client })
+          );
           await this.client.commit();
           return result;
         } catch (error) {

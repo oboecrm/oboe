@@ -1,5 +1,4 @@
-import { defineConfig, defineModule } from "@oboe/core";
-import { compileSchema } from "@oboe/core";
+import { compileSchema, defineConfig, defineModule } from "@oboe/core";
 import { expect, it } from "vitest";
 
 import { createRelationalManifest } from "./manifest.js";

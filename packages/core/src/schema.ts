@@ -1,6 +1,7 @@
 import type {
   CompiledCollection,
   CompiledSchema,
+  FieldConfig,
   ModuleConfig,
   OboeConfig,
 } from "./types.js";
@@ -11,6 +12,34 @@ function assertUnique(slug: string, seen: Set<string>, label: string) {
   }
 
   seen.add(slug);
+}
+
+function isRelationshipField(field: FieldConfig) {
+  return field.type === "relation" || field.type === "relationship";
+}
+
+function validateRelationshipFields(
+  collections: Map<string, CompiledCollection>
+) {
+  for (const collection of collections.values()) {
+    for (const field of collection.fields) {
+      if (!isRelationshipField(field)) {
+        continue;
+      }
+
+      if (!field.relationTo) {
+        throw new Error(
+          `Relationship field "${collection.slug}.${field.name}" must define relationTo.`
+        );
+      }
+
+      if (!collections.has(field.relationTo)) {
+        throw new Error(
+          `Relationship field "${collection.slug}.${field.name}" refers to unknown collection "${field.relationTo}".`
+        );
+      }
+    }
+  }
 }
 
 export function compileSchema(config: OboeConfig): CompiledSchema {
@@ -45,6 +74,8 @@ export function compileSchema(config: OboeConfig): CompiledSchema {
       globals.set(global.slug, global);
     }
   }
+
+  validateRelationshipFields(collections);
 
   return {
     collections,

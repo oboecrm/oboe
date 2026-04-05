@@ -6,16 +6,16 @@ import type {
 } from "@oboe/storage-relational";
 import { and, desc, eq, sql } from "drizzle-orm";
 import {
-  PgDeleteBase,
-  PgDialect,
-  PgInsertBuilder,
-  PgUpdateBuilder,
-  QueryBuilder,
   bigserial,
   index,
   integer,
   jsonb,
+  PgDeleteBase,
+  PgDialect,
+  PgInsertBuilder,
+  PgUpdateBuilder,
   pgTable,
+  QueryBuilder,
   text,
   timestamp,
   uniqueIndex,
@@ -126,7 +126,10 @@ function buildWhereClause(collection: string, query?: CollectionQuery) {
   );
 }
 
-function toStatement(statement: { params: unknown[]; sql: string }): RelationalStatement {
+function toStatement(statement: {
+  params: unknown[];
+  sql: string;
+}): RelationalStatement {
   return {
     params: statement.params,
     sql: statement.sql,
@@ -209,15 +212,22 @@ export const postgresDialect: RelationalDialect = {
       id: args.id,
     });
     return toStatement(
-      args.returning ? builder.returning(recordSelection).toSQL() : builder.toSQL()
+      args.returning
+        ? builder.returning(recordSelection).toSQL()
+        : builder.toSQL()
     );
   },
   buildDeleteRecordStatement(args) {
     const builder = new PgDeleteBase(oboeRecords, session, dialect).where(
-      and(eq(oboeRecords.collection, args.collection), eq(oboeRecords.id, args.id))
+      and(
+        eq(oboeRecords.collection, args.collection),
+        eq(oboeRecords.id, args.id)
+      )
     );
     return toStatement(
-      args.returning ? builder.returning(recordSelection).toSQL() : builder.toSQL()
+      args.returning
+        ? builder.returning(recordSelection).toSQL()
+        : builder.toSQL()
     );
   },
   buildEnqueueJobStatement(job: JobRequest) {
@@ -242,7 +252,12 @@ export const postgresDialect: RelationalDialect = {
       queryBuilder
         .select(recordSelection)
         .from(oboeRecords)
-        .where(and(eq(oboeRecords.collection, args.collection), eq(oboeRecords.id, args.id)))
+        .where(
+          and(
+            eq(oboeRecords.collection, args.collection),
+            eq(oboeRecords.id, args.id)
+          )
+        )
         .toSQL()
     );
   },
@@ -319,9 +334,16 @@ export const postgresDialect: RelationalDialect = {
         data: sql`${oboeRecords.data} || ${JSON.stringify(args.data)}::jsonb`,
         updatedAt: sql`now()`,
       })
-      .where(and(eq(oboeRecords.collection, args.collection), eq(oboeRecords.id, args.id)));
+      .where(
+        and(
+          eq(oboeRecords.collection, args.collection),
+          eq(oboeRecords.id, args.id)
+        )
+      );
     return toStatement(
-      args.returning ? builder.returning(recordSelection).toSQL() : builder.toSQL()
+      args.returning
+        ? builder.returning(recordSelection).toSQL()
+        : builder.toSQL()
     );
   },
 };

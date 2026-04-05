@@ -8,10 +8,9 @@ import type {
 } from "@oboe/core";
 import { RelationalStorage } from "@oboe/storage-relational";
 
-import { bootstrapSql, postgresDialect } from "./dialect.js";
+import { postgresDialect } from "./dialect.js";
 
-export { bootstrapSql } from "./dialect.js";
-export { postgresDialect } from "./dialect.js";
+export { bootstrapSql, postgresDialect } from "./dialect.js";
 
 export interface PostgresAdapterOptions {
   pool: PostgresPoolLike | PostgresQueryable;

@@ -64,7 +64,9 @@ export class RelationalStorage {
     if (this.dialect.capabilities.nativeReturning) {
       const row = result.rows[0];
       if (!row) {
-        throw new Error("Relational adapter failed to return the created record.");
+        throw new Error(
+          "Relational adapter failed to return the created record."
+        );
       }
 
       return toRecord(row);

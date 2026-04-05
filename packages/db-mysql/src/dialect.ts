@@ -6,19 +6,22 @@ import type {
 } from "@oboe/storage-relational";
 import { and, desc, eq, sql } from "drizzle-orm";
 import {
-  MySqlDialect,
-  QueryBuilder,
   datetime,
   index,
   int,
   json,
+  MySqlDialect,
   mysqlTable,
+  QueryBuilder,
   serial,
-  text,
   uniqueIndex,
   varchar,
 } from "drizzle-orm/mysql-core";
-import { MySqlDeleteBase, MySqlInsertBuilder, MySqlUpdateBuilder } from "drizzle-orm/mysql-core/query-builders";
+import {
+  MySqlDeleteBase,
+  MySqlInsertBuilder,
+  MySqlUpdateBuilder,
+} from "drizzle-orm/mysql-core/query-builders";
 
 const dialect = new MySqlDialect();
 const queryBuilder = new QueryBuilder(dialect);
@@ -103,7 +106,10 @@ const recordSelection = {
   updated_at: oboeRecords.updatedAt,
 };
 
-function toStatement(statement: { params: unknown[]; sql: string }): RelationalStatement {
+function toStatement(statement: {
+  params: unknown[];
+  sql: string;
+}): RelationalStatement {
   return {
     params: statement.params,
     sql: statement.sql,
@@ -196,7 +202,12 @@ export const mySqlDialect: RelationalDialect = {
   buildDeleteRecordStatement(args) {
     return toStatement(
       new MySqlDeleteBase(oboeRecords, session, dialect)
-        .where(and(eq(oboeRecords.collection, args.collection), eq(oboeRecords.id, args.id)))
+        .where(
+          and(
+            eq(oboeRecords.collection, args.collection),
+            eq(oboeRecords.id, args.id)
+          )
+        )
         .toSQL()
     );
   },
@@ -208,7 +219,9 @@ export const mySqlDialect: RelationalDialect = {
           idempotencyKey: job.idempotencyKey ?? null,
           name: job.name,
           payload: job.payload,
-          runAt: job.runAt ?? new Date().toISOString().slice(0, 19).replace("T", " "),
+          runAt:
+            job.runAt ??
+            new Date().toISOString().slice(0, 19).replace("T", " "),
         })
         .toSQL()
     );
@@ -218,7 +231,12 @@ export const mySqlDialect: RelationalDialect = {
       queryBuilder
         .select(recordSelection)
         .from(oboeRecords)
-        .where(and(eq(oboeRecords.collection, args.collection), eq(oboeRecords.id, args.id)))
+        .where(
+          and(
+            eq(oboeRecords.collection, args.collection),
+            eq(oboeRecords.id, args.id)
+          )
+        )
         .toSQL()
     );
   },
@@ -296,7 +314,12 @@ export const mySqlDialect: RelationalDialect = {
           data: sql`JSON_MERGE_PATCH(${oboeRecords.data}, CAST(${JSON.stringify(args.data)} AS JSON))`,
           updatedAt: sql`CURRENT_TIMESTAMP`,
         })
-        .where(and(eq(oboeRecords.collection, args.collection), eq(oboeRecords.id, args.id)))
+        .where(
+          and(
+            eq(oboeRecords.collection, args.collection),
+            eq(oboeRecords.id, args.id)
+          )
+        )
         .toSQL()
     );
   },

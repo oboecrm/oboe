@@ -7,9 +7,41 @@ import {
   RecordDetailView,
   TimelineView,
 } from "@oboe/admin-next";
-import { notFound } from "next/navigation";
+import type { FieldConfig } from "@oboe/core";
+import { notFound, redirect } from "next/navigation";
 
 import { getStudioRuntime } from "../../../lib/runtime";
+
+function parseFieldValue(field: FieldConfig, formData: FormData) {
+  if (field.type === "boolean") {
+    return formData.get(field.name) === "true";
+  }
+
+  const rawValue = formData.get(field.name);
+  if (typeof rawValue !== "string") {
+    return undefined;
+  }
+
+  const value = rawValue.trim();
+  if (!value) {
+    return undefined;
+  }
+
+  if (field.type === "number") {
+    const parsed = Number(value);
+    if (Number.isNaN(parsed)) {
+      return undefined;
+    }
+
+    return parsed;
+  }
+
+  if (field.type === "json") {
+    return JSON.parse(value) as unknown;
+  }
+
+  return value;
+}
 
 function SetupError(props: { message: string }) {
   return (
@@ -47,7 +79,36 @@ export default async function AdminPage(props: {
     }
 
     if (segments[1] === "new") {
-      return <RecordCreateView collection={collection} />;
+      const createRecord = async (formData: FormData) => {
+        "use server";
+
+        const { runtime } = await getStudioRuntime();
+        const runtimeCollection = runtime.schema.collections.get(
+          collection.slug
+        );
+
+        if (!runtimeCollection) {
+          throw new Error(`Unknown collection "${collection.slug}".`);
+        }
+
+        const data = Object.fromEntries(
+          runtimeCollection.fields.flatMap((field) => {
+            const value = parseFieldValue(field, formData);
+
+            return value === undefined ? [] : [[field.name, value]];
+          })
+        );
+        const doc = await runtime.create({
+          collection: runtimeCollection.slug,
+          data,
+        });
+
+        redirect(`/admin/${runtimeCollection.slug}/${doc.id}`);
+      };
+
+      return (
+        <RecordCreateView collection={collection} formAction={createRecord} />
+      );
     }
 
     if (segments[1]) {

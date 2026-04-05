@@ -20,7 +20,9 @@ export interface RelationalQueryable {
   query: <TRow = Record<string, unknown>>(
     statement: RelationalStatement
   ) => Promise<RelationalQueryResult<TRow>>;
-  transaction?: <T>(callback: (queryable: RelationalQueryable) => Promise<T>) => Promise<T>;
+  transaction?: <T>(
+    callback: (queryable: RelationalQueryable) => Promise<T>
+  ) => Promise<T>;
 }
 
 export interface RelationalDialectCapabilities {

@@ -1,4 +1,9 @@
-import type { CompiledCollection, OboeRecord, OboeRuntime } from "@oboe/core";
+import type {
+  CompiledCollection,
+  FieldConfig,
+  OboeRecord,
+  OboeRuntime,
+} from "@oboe/core";
 import React from "react";
 
 const shellStyle: React.CSSProperties = {
@@ -22,8 +27,198 @@ const mutedStyle: React.CSSProperties = {
   color: "#476452",
 };
 
+const fieldInputStyle: React.CSSProperties = {
+  border: "1px solid rgba(16, 36, 24, 0.16)",
+  borderRadius: "12px",
+  font: "inherit",
+  minHeight: "44px",
+  padding: "10px 12px",
+  width: "100%",
+};
+
+const fieldLabelStyle: React.CSSProperties = {
+  display: "grid",
+  gap: "8px",
+};
+
+const submitButtonStyle: React.CSSProperties = {
+  background: "#102418",
+  border: 0,
+  borderRadius: "999px",
+  color: "#eff5ef",
+  cursor: "pointer",
+  font: "inherit",
+  fontWeight: 600,
+  padding: "12px 18px",
+};
+
 function titleForCollection(collection: CompiledCollection) {
   return collection.labels?.plural ?? collection.slug;
+}
+
+function fieldLabel(field: FieldConfig) {
+  return field.label ?? field.name;
+}
+
+function isRelationshipField(field: FieldConfig) {
+  return field.type === "relation" || field.type === "relationship";
+}
+
+function formatValue(value: unknown) {
+  if (value === null || value === undefined) {
+    return "";
+  }
+
+  if (typeof value === "string") {
+    return value;
+  }
+
+  if (
+    typeof value === "number" ||
+    typeof value === "boolean" ||
+    typeof value === "bigint"
+  ) {
+    return String(value);
+  }
+
+  return JSON.stringify(value);
+}
+
+function renderDetailValue(value: unknown) {
+  if (value === null || value === undefined) {
+    return "";
+  }
+
+  if (typeof value === "object") {
+    return (
+      <pre
+        style={{
+          margin: 0,
+          overflowX: "auto",
+          whiteSpace: "pre-wrap",
+        }}
+      >
+        {JSON.stringify(value, null, 2)}
+      </pre>
+    );
+  }
+
+  return formatValue(value);
+}
+
+function renderCreateField(field: FieldConfig) {
+  if (field.type === "boolean") {
+    return (
+      <label
+        key={field.name}
+        style={{
+          alignItems: "center",
+          display: "flex",
+          gap: "12px",
+        }}
+      >
+        <input
+          name={field.name}
+          style={{ height: 18, width: 18 }}
+          type="checkbox"
+          value="true"
+        />
+        <span>{fieldLabel(field)}</span>
+      </label>
+    );
+  }
+
+  if (field.type === "textarea") {
+    return (
+      <label key={field.name} style={fieldLabelStyle}>
+        <span>
+          {fieldLabel(field)}
+          {field.required ? " *" : ""}
+        </span>
+        <textarea
+          name={field.name}
+          required={field.required}
+          rows={5}
+          style={{ ...fieldInputStyle, resize: "vertical" }}
+        />
+      </label>
+    );
+  }
+
+  if (field.type === "json") {
+    return (
+      <label key={field.name} style={fieldLabelStyle}>
+        <span>
+          {fieldLabel(field)}
+          {field.required ? " *" : ""}
+        </span>
+        <textarea
+          name={field.name}
+          placeholder='{\n  "key": "value"\n}'
+          required={field.required}
+          rows={8}
+          style={{
+            ...fieldInputStyle,
+            fontFamily: "ui-monospace, SFMono-Regular, monospace",
+            resize: "vertical",
+          }}
+        />
+      </label>
+    );
+  }
+
+  if (field.type === "select") {
+    return (
+      <label key={field.name} style={fieldLabelStyle}>
+        <span>
+          {fieldLabel(field)}
+          {field.required ? " *" : ""}
+        </span>
+        <select
+          defaultValue=""
+          name={field.name}
+          required={field.required}
+          style={fieldInputStyle}
+        >
+          <option value="">Select an option</option>
+          {(field.options ?? []).map((option) => (
+            <option key={option.value} value={option.value}>
+              {option.label}
+            </option>
+          ))}
+        </select>
+      </label>
+    );
+  }
+
+  const inputType =
+    field.type === "email"
+      ? "email"
+      : field.type === "number"
+        ? "number"
+        : field.type === "date"
+          ? "date"
+          : "text";
+  const placeholder =
+    isRelationshipField(field) && field.relationTo
+      ? `${field.relationTo} id`
+      : undefined;
+
+  return (
+    <label key={field.name} style={fieldLabelStyle}>
+      <span>
+        {fieldLabel(field)}
+        {field.required ? " *" : ""}
+      </span>
+      <input
+        name={field.name}
+        placeholder={placeholder}
+        required={field.required}
+        style={fieldInputStyle}
+        type={inputType}
+      />
+    </label>
+  );
 }
 
 export function AdminDashboard(props: { runtime: OboeRuntime }) {
@@ -142,7 +337,7 @@ export function CollectionListView(props: {
                   </a>
                 </td>
                 {columns.map((column) => (
-                  <td key={column}>{String(doc.data[column] ?? "")}</td>
+                  <td key={column}>{formatValue(doc.data[column])}</td>
                 ))}
               </tr>
             ))}
@@ -182,7 +377,7 @@ export function RecordDetailView(props: {
           {props.collection.fields.map((field) => (
             <React.Fragment key={field.name}>
               <dt>{field.label ?? field.name}</dt>
-              <dd>{String(props.doc.data[field.name] ?? "")}</dd>
+              <dd>{renderDetailValue(props.doc.data[field.name])}</dd>
             </React.Fragment>
           ))}
         </dl>
@@ -191,7 +386,10 @@ export function RecordDetailView(props: {
   );
 }
 
-export function RecordCreateView(props: { collection: CompiledCollection }) {
+export function RecordCreateView(props: {
+  collection: CompiledCollection;
+  formAction?: (formData: FormData) => void | Promise<void>;
+}) {
   return (
     <div style={shellStyle}>
       <div style={panelStyle}>
@@ -200,29 +398,30 @@ export function RecordCreateView(props: { collection: CompiledCollection }) {
           Create {props.collection.labels?.singular ?? props.collection.slug}
         </h1>
         <p style={mutedStyle}>
-          POST JSON to <code>/api/{props.collection.slug}</code> or replace this
-          screen with a custom admin form.
+          Generated inputs are based on the collection field config. Replace
+          this screen with a custom admin form when the workflow needs more than
+          CRUD scaffolding.
         </p>
-        <pre
+        <form
+          action={props.formAction}
           style={{
-            background: "#102418",
-            borderRadius: "16px",
-            color: "#eff5ef",
-            overflowX: "auto",
-            padding: "16px",
+            display: "grid",
+            gap: "16px",
           }}
         >
-          {JSON.stringify(
-            Object.fromEntries(
-              props.collection.fields.map((field) => [
-                field.name,
-                `<${field.type}>`,
-              ])
-            ),
-            null,
-            2
-          )}
-        </pre>
+          {props.collection.fields.map(renderCreateField)}
+          <div style={{ display: "flex", gap: "12px" }}>
+            <button style={submitButtonStyle} type="submit">
+              Create record
+            </button>
+            <a
+              href={`/api/${props.collection.slug}`}
+              style={{ ...mutedStyle, alignSelf: "center" }}
+            >
+              API endpoint
+            </a>
+          </div>
+        </form>
       </div>
     </div>
   );

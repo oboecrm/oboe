@@ -1,7 +1,5 @@
 import { expect, it } from "vitest";
-
-import { bootstrapSql } from "./index.js";
-import { sqliteDialect } from "./index.js";
+import { bootstrapSql, sqliteDialect } from "./index.js";
 
 it("includes the migration table in bootstrap sql", () => {
   expect(bootstrapSql).toContain("CREATE TABLE IF NOT EXISTS oboe_migrations");

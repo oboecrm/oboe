@@ -89,7 +89,10 @@ export class RelationalMigrator {
     await run(this.queryable);
   }
 
-  async ensureCurrentManifest(schema: CompiledSchema, environment: "development" | "production") {
+  async ensureCurrentManifest(
+    schema: CompiledSchema,
+    environment: "development" | "production"
+  ) {
     const manifest = createRelationalManifest(schema);
     await this.assertJsonSupport();
 
@@ -159,11 +162,16 @@ export class RelationalMigrator {
   }
 
   private async bootstrap(manifest: RelationalManifest) {
-    const bootstrapMigration = createBootstrapMigration(manifest, this.dialect.name);
+    const bootstrapMigration = createBootstrapMigration(
+      manifest,
+      this.dialect.name
+    );
     const run = async (tx: RelationalQueryable) => {
       await this.ensureMigrationTable(tx);
 
-      for (const statement of this.dialect.buildBootstrapStatements({ manifest })) {
+      for (const statement of this.dialect.buildBootstrapStatements({
+        manifest,
+      })) {
         await tx.query(statement);
       }
 
@@ -228,7 +236,10 @@ export function getPendingMigrations(args: {
   return args.generated.filter((migration) => !appliedIds.has(migration.id));
 }
 
-export function manifestMatchesCurrentSchema(schema: CompiledSchema, manifest: RelationalManifest) {
+export function manifestMatchesCurrentSchema(
+  schema: CompiledSchema,
+  manifest: RelationalManifest
+) {
   return createRelationalManifest(schema).checksum === manifest.checksum;
 }
 

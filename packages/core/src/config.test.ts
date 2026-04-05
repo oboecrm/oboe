@@ -51,4 +51,32 @@ describe("defineConfig", () => {
     expect(deals?.admin?.views?.timeline?.path).toBe("/timeline");
     expect(deals?.admin?.views?.pipeline?.path).toBe("/pipeline");
   });
+
+  it("rejects relationship fields that point to unknown collections", () => {
+    expect(() =>
+      compileSchema(
+        defineConfig({
+          modules: [
+            defineModule({
+              collections: [
+                {
+                  fields: [
+                    {
+                      name: "company",
+                      relationTo: "companies",
+                      type: "relationship",
+                    },
+                  ],
+                  slug: "contacts",
+                },
+              ],
+              slug: "crm",
+            }),
+          ],
+        })
+      )
+    ).toThrow(
+      'Relationship field "contacts.company" refers to unknown collection "companies".'
+    );
+  });
 });

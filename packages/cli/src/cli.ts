@@ -1,4 +1,7 @@
 #!/usr/bin/env node
+import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { compileSchema } from "@oboe/core";
 import { mySqlDialect } from "@oboe/db-mysql";
 import { postgresDialect } from "@oboe/db-postgres";
@@ -8,16 +11,13 @@ import {
   createRelationalManifest,
   getPendingMigrations,
   manifestMatchesCurrentSchema,
-  RelationalMigrator,
   type RelationalDialect,
   type RelationalMigration,
+  RelationalMigrator,
   type RelationalQueryable,
   type RelationalStatement,
 } from "@oboe/storage-relational";
 import Database from "better-sqlite3";
-import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
-import path from "node:path";
-import { pathToFileURL } from "node:url";
 import mysql from "mysql2/promise";
 import { Pool } from "pg";
 import { tsImport } from "tsx/esm/api";
@@ -60,7 +60,10 @@ function parseArgs(argv: string[]) {
 
 async function loadConfig(configPath: string) {
   const resolvedPath = path.resolve(process.cwd(), configPath);
-  const module = await tsImport(pathToFileURL(resolvedPath).href, import.meta.url);
+  const module = await tsImport(
+    pathToFileURL(resolvedPath).href,
+    import.meta.url
+  );
   return module.default;
 }
 
@@ -161,7 +164,7 @@ async function createQueryable(options: CliOptions): Promise<{
     const pool = mysql.createPool({
       uri: options.url ?? process.env.DATABASE_URL,
     });
-    const normalizeRows = <TRow,>(
+    const normalizeRows = <TRow>(
       rows:
         | mysql.OkPacket[]
         | mysql.ResultSetHeader
@@ -238,7 +241,9 @@ async function createQueryable(options: CliOptions): Promise<{
   }
 
   const database = new Database(
-    options.file ?? process.env.SQLITE_FILE ?? path.join(process.cwd(), ".oboe", "oboe.db")
+    options.file ??
+      process.env.SQLITE_FILE ??
+      path.join(process.cwd(), ".oboe", "oboe.db")
   );
 
   return {
@@ -248,27 +253,29 @@ async function createQueryable(options: CliOptions): Promise<{
     queryable: (() => {
       let queryable!: RelationalQueryable;
       queryable = {
-      query: async ({ params, sql }) => {
-        const statement = database.prepare(sql);
-        if (sql.trim().toLowerCase().startsWith("select")) {
-          return {
-            rows: statement.all(...params),
-          };
-        }
+        query: async ({ params, sql }) => {
+          const statement = database.prepare(sql);
+          if (sql.trim().toLowerCase().startsWith("select")) {
+            return {
+              rows: statement.all(...params),
+            };
+          }
 
-        const result = statement.run(...params);
-        return {
-          affectedRows: result.changes,
-          lastInsertId: result.lastInsertRowid,
-          rows: [],
-        };
-      },
-      transaction: async (callback) => {
-        const run = (database.transaction as unknown as <TReturn>(
-          fn: () => Promise<TReturn>
-        ) => () => Promise<TReturn>)(() => callback(queryable));
-        return await run();
-      },
+          const result = statement.run(...params);
+          return {
+            affectedRows: result.changes,
+            lastInsertId: result.lastInsertRowid,
+            rows: [],
+          };
+        },
+        transaction: async (callback) => {
+          const run = (
+            database.transaction as unknown as <TReturn>(
+              fn: () => Promise<TReturn>
+            ) => () => Promise<TReturn>
+          )(() => callback(queryable));
+          return await run();
+        },
       };
 
       return queryable;
@@ -279,9 +286,10 @@ async function createQueryable(options: CliOptions): Promise<{
 async function commandGenerate(options: CliOptions) {
   const config = await loadConfig(options.config);
   const schema = compileSchema(config);
-  const id = `${new Date().toISOString().replace(/[-:TZ.]/g, "").slice(0, 14)}_${
-    options.name ?? "bootstrap"
-  }`;
+  const id = `${new Date()
+    .toISOString()
+    .replace(/[-:TZ.]/g, "")
+    .slice(0, 14)}_${options.name ?? "bootstrap"}`;
   const generated = createGeneratedMigration({
     dialect: options.dialect,
     id,
@@ -294,17 +302,18 @@ async function commandGenerate(options: CliOptions) {
   const latest = existing[existing.length - 1];
 
   if (latest && latest.manifest.checksum === generated.manifest.checksum) {
-    console.log(`No migration generated. ${options.dialect} manifest is unchanged.`);
+    console.log(
+      `No migration generated. ${options.dialect} manifest is unchanged.`
+    );
     return;
   }
 
-  const sqlContent =
-    `${dialect
-      .buildBootstrapStatements({
-        manifest: generated.manifest,
-      })
-      .map((statement) => statement.sql)
-      .join("\n\n")}\n`;
+  const sqlContent = `${dialect
+    .buildBootstrapStatements({
+      manifest: generated.manifest,
+    })
+    .map((statement) => statement.sql)
+    .join("\n\n")}\n`;
 
   await mkdir(directory, { recursive: true });
   await writeFile(path.join(directory, `${id}.sql`), sqlContent, "utf8");
@@ -458,7 +467,7 @@ async function main() {
 
   if (!command || !options.dialect) {
     throw new Error(
-      'Usage: oboe <migrate:generate|migrate|migrate:status|db:push> --dialect <postgres|mysql|sqlite> [--config oboe.config.ts] [--url ...] [--file ...]'
+      "Usage: oboe <migrate:generate|migrate|migrate:status|db:push> --dialect <postgres|mysql|sqlite> [--config oboe.config.ts] [--url ...] [--file ...]"
     );
   }
 
