@@ -10,8 +10,8 @@
     "noEmit": true,
     "paths": {
       "@oboe/admin-next": ["../../packages/admin-next/src/index.tsx"],
-      "@oboe/core": ["../../packages/core/src/index.ts"],
-      "@oboe/core/testing": ["../../packages/core/src/testing/index.ts"],
+      "@oboe/core": ["../../packages/core/dist/index.js"],
+      "@oboe/core/testing": ["../../packages/core/dist/testing/index.js"],
       "@oboe/db-postgres": ["../../packages/db-postgres/dist/index.js"],
       "@oboe/graphql": ["../../packages/graphql/src/index.ts"],
       "@oboe/http": ["../../packages/http/src/index.ts"],
