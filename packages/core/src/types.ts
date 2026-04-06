@@ -133,6 +133,93 @@ export interface FieldConfig extends BaseFieldConfig {
   validate?: FieldValidator;
 }
 
+export interface UploadConfig {
+  maxFileSize?: number;
+  mimeTypes?: string[];
+}
+
+export interface UploadInputFile {
+  buffer: Uint8Array;
+  filename: string;
+  filesize: number;
+  mimeType: string;
+}
+
+export interface StoredFileData {
+  filename: string;
+  filesize: number;
+  mimeType: string;
+  prefix?: string;
+  providerMetadata?: Record<string, unknown>;
+  storageAdapter: string;
+  storageKey: string;
+  url?: string;
+}
+
+export type StorageServeMode = "direct" | "proxy";
+
+export type GenerateFileURL = (args: {
+  collection: CollectionConfig;
+  file: StoredFileData;
+  req?: Request;
+}) => Promise<string> | string;
+
+export interface StorageAdapterUploadArgs {
+  collection: CollectionConfig;
+  data: Record<string, unknown>;
+  file: UploadInputFile;
+  req?: Request;
+  user?: unknown;
+}
+
+export interface StorageAdapterDeleteArgs {
+  collection: CollectionConfig;
+  file: StoredFileData;
+  req?: Request;
+  user?: unknown;
+}
+
+export interface StorageAdapterDownloadArgs {
+  collection: CollectionConfig;
+  file: StoredFileData;
+  req?: Request;
+  user?: unknown;
+}
+
+export interface StorageAdapterGenerateURLArgs {
+  collection: CollectionConfig;
+  file: StoredFileData;
+  req?: Request;
+}
+
+export interface GeneratedStorageAdapter {
+  generateURL?: (
+    args: StorageAdapterGenerateURLArgs
+  ) => Promise<string> | string;
+  handleDelete: (args: StorageAdapterDeleteArgs) => Promise<void> | void;
+  handleDownload: (
+    args: StorageAdapterDownloadArgs
+  ) => Promise<Response> | Response;
+  handleUpload: (
+    args: StorageAdapterUploadArgs
+  ) => Promise<StoredFileData> | StoredFileData;
+  name: string;
+  onInit?: () => Promise<void> | void;
+}
+
+export type StorageAdapterFactory = (args: {
+  collection: CollectionConfig;
+  prefix?: string;
+  serveMode: StorageServeMode;
+}) => GeneratedStorageAdapter;
+
+export interface CollectionStorageConfig {
+  adapter?: StorageAdapterFactory;
+  generateFileURL?: GenerateFileURL;
+  prefix?: string;
+  serveMode?: StorageServeMode;
+}
+
 export interface AdminViewConfig {
   component: string;
   label: string;
@@ -205,6 +292,8 @@ export interface CollectionConfig {
   };
   schema?: CollectionSchema;
   slug: string;
+  storage?: CollectionStorageConfig;
+  upload?: boolean | UploadConfig;
   validate?: CollectionValidator;
 }
 
@@ -458,6 +547,7 @@ export interface OboeRuntime {
     collection: string;
     data: Record<string, unknown>;
     depth?: number;
+    file?: UploadInputFile;
     overrideAccess?: boolean;
     req?: Request;
     select?: SelectShape;
@@ -473,6 +563,13 @@ export interface OboeRuntime {
     select?: SelectShape;
     user?: unknown;
   }) => Promise<OboeDocument | null>;
+  downloadFile: (args: {
+    collection: string;
+    id: string;
+    overrideAccess?: boolean;
+    req?: Request;
+    user?: unknown;
+  }) => Promise<Response | null>;
   events: EventBus;
   find: (args: {
     collection: string;
@@ -499,6 +596,7 @@ export interface OboeRuntime {
     collection: string;
     data: Record<string, unknown>;
     depth?: number;
+    file?: UploadInputFile;
     id: string;
     overrideAccess?: boolean;
     req?: Request;

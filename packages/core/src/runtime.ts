@@ -29,10 +29,18 @@ import type {
   SelectShape,
   StandardSchemaIssue,
   StandardSchemaLike,
+  StoredFileData,
+  UploadConfig,
+  UploadInputFile,
   ValidationIssue,
   ValidationIssueResult,
 } from "./types.js";
 import { OboeValidationError } from "./types.js";
+import {
+  getCollectionFileProxyPath,
+  getCollectionServeMode,
+  getCollectionStorageAdapter,
+} from "./upload-storage.js";
 
 const noopGraphQLExecutor: GraphQLExecutor = {
   async execute() {
@@ -679,7 +687,7 @@ async function runAfterRead(args: {
   req?: Request;
   user?: unknown;
 }) {
-  let doc = args.doc;
+  let doc = await attachResolvedFileUrl(args);
 
   for (const hook of args.collection.hooks?.afterRead ?? []) {
     doc = await hook({
@@ -694,6 +702,206 @@ async function runAfterRead(args: {
   }
 
   return doc;
+}
+
+function getUploadConfig(collection: CollectionConfig): UploadConfig | null {
+  if (!collection.upload) {
+    return null;
+  }
+
+  return typeof collection.upload === "object" ? collection.upload : {};
+}
+
+function getStoredFileData(value: unknown): StoredFileData | null {
+  if (!isPlainObject(value)) {
+    return null;
+  }
+
+  if (
+    typeof value.filename !== "string" ||
+    typeof value.filesize !== "number" ||
+    typeof value.mimeType !== "string" ||
+    typeof value.storageAdapter !== "string" ||
+    typeof value.storageKey !== "string"
+  ) {
+    return null;
+  }
+
+  return {
+    filename: value.filename,
+    filesize: value.filesize,
+    mimeType: value.mimeType,
+    prefix: typeof value.prefix === "string" ? value.prefix : undefined,
+    providerMetadata: isPlainObject(value.providerMetadata)
+      ? value.providerMetadata
+      : undefined,
+    storageAdapter: value.storageAdapter,
+    storageKey: value.storageKey,
+    url: typeof value.url === "string" ? value.url : undefined,
+  };
+}
+
+async function resolveFileUrl(args: {
+  collection: CollectionConfig;
+  file: StoredFileData;
+  id: string;
+  req?: Request;
+}) {
+  if (getCollectionServeMode(args.collection) === "proxy") {
+    return getCollectionFileProxyPath({
+      collection: args.collection.slug,
+      id: args.id,
+    });
+  }
+
+  if (args.collection.storage?.generateFileURL) {
+    return await args.collection.storage.generateFileURL({
+      collection: args.collection,
+      file: args.file,
+      req: args.req,
+    });
+  }
+
+  const adapter = getCollectionStorageAdapter(args.collection);
+  if (adapter.generateURL) {
+    return await adapter.generateURL({
+      collection: args.collection,
+      file: args.file,
+      req: args.req,
+    });
+  }
+
+  return getCollectionFileProxyPath({
+    collection: args.collection.slug,
+    id: args.id,
+  });
+}
+
+async function attachResolvedFileUrl(args: {
+  collection: CollectionConfig;
+  doc: OboeRecord;
+  req?: Request;
+}) {
+  const file = getStoredFileData(args.doc.data.file);
+  if (!file) {
+    return args.doc;
+  }
+
+  return {
+    ...args.doc,
+    data: {
+      ...args.doc.data,
+      file: {
+        ...file,
+        url: await resolveFileUrl({
+          collection: args.collection,
+          file,
+          id: args.doc.id,
+          req: args.req,
+        }),
+      },
+    },
+  };
+}
+
+function validateUploadInput(args: {
+  collection: CollectionConfig;
+  data: Record<string, unknown>;
+  file?: UploadInputFile;
+  operation: "create" | "update";
+}): ValidationIssue[] {
+  const upload = getUploadConfig(args.collection);
+  if (!upload) {
+    return args.file
+      ? [
+          {
+            message: `Collection "${args.collection.slug}" does not accept file uploads.`,
+            path: ["file"],
+          },
+        ]
+      : [];
+  }
+
+  const issues: ValidationIssue[] = [];
+
+  if (typeof args.data.file !== "undefined") {
+    issues.push({
+      message: `Field "${args.collection.slug}.file" is managed by Oboe and cannot be set directly.`,
+      path: ["file"],
+    });
+  }
+
+  if (args.operation === "create" && !args.file) {
+    issues.push({
+      message: `Upload-enabled collection "${args.collection.slug}" requires a file on create.`,
+      path: ["file"],
+    });
+    return issues;
+  }
+
+  if (!args.file) {
+    return issues;
+  }
+
+  if (
+    typeof upload.maxFileSize === "number" &&
+    args.file.filesize > upload.maxFileSize
+  ) {
+    issues.push({
+      message: `Uploaded file exceeds maxFileSize for "${args.collection.slug}".`,
+      path: ["file"],
+    });
+  }
+
+  if (
+    upload.mimeTypes?.length &&
+    !upload.mimeTypes.includes(args.file.mimeType)
+  ) {
+    issues.push({
+      message: `Uploaded file mime type "${args.file.mimeType}" is not allowed for "${args.collection.slug}".`,
+      path: ["file"],
+    });
+  }
+
+  return issues;
+}
+
+async function uploadCollectionFile(args: {
+  collection: CollectionConfig;
+  data: Record<string, unknown>;
+  file?: UploadInputFile;
+  req?: Request;
+  user?: unknown;
+}) {
+  if (!args.file || !getUploadConfig(args.collection)) {
+    return null;
+  }
+
+  return await getCollectionStorageAdapter(args.collection).handleUpload({
+    collection: args.collection,
+    data: args.data,
+    file: args.file,
+    req: args.req,
+    user: args.user,
+  });
+}
+
+async function cleanupUploadedFile(args: {
+  collection: CollectionConfig;
+  file: StoredFileData | null;
+  req?: Request;
+  user?: unknown;
+}) {
+  if (!args.file) {
+    return;
+  }
+
+  await getCollectionStorageAdapter(args.collection).handleDelete({
+    collection: args.collection,
+    file: args.file,
+    req: args.req,
+    user: args.user,
+  });
 }
 
 async function runBeforeChange(args: {
@@ -752,6 +960,7 @@ async function prepareValidatedData(args: {
   collection: CollectionConfig;
   data: Record<string, unknown>;
   db: DatabaseAdapter;
+  file?: UploadInputFile;
   operation: "create" | "update";
   originalDoc?: OboeRecord | null;
   req?: Request;
@@ -773,6 +982,15 @@ async function prepareValidatedData(args: {
         }
       : nextData;
   const issues: ValidationIssue[] = [];
+
+  issues.push(
+    ...validateUploadInput({
+      collection: args.collection,
+      data: nextData,
+      file: args.file,
+      operation: args.operation,
+    })
+  );
 
   issues.push(
     ...(await runBuiltInFieldValidation({
@@ -1039,6 +1257,7 @@ export function createOboeRuntime(args: {
       collection,
       data,
       depth,
+      file,
       overrideAccess,
       req,
       select,
@@ -1065,14 +1284,38 @@ export function createOboeRuntime(args: {
         collection: collectionConfig,
         data,
         db: args.db,
+        file,
         operation: "create",
         req,
         user,
       });
-      const created = await args.db.create({
-        collection,
+      const uploadedFile = await uploadCollectionFile({
+        collection: collectionConfig,
         data: candidateData,
+        file,
+        req,
+        user,
       });
+      let created: OboeRecord;
+      try {
+        created = await args.db.create({
+          collection,
+          data: uploadedFile
+            ? {
+                ...candidateData,
+                file: uploadedFile,
+              }
+            : candidateData,
+        });
+      } catch (error) {
+        await cleanupUploadedFile({
+          collection: collectionConfig,
+          file: uploadedFile,
+          req,
+          user,
+        });
+        throw error;
+      }
       const doc = await runAfterChange({
         collection: collectionConfig,
         doc: created,
@@ -1094,11 +1337,18 @@ export function createOboeRuntime(args: {
         id: doc.id,
       });
 
+      const readable = await runAfterRead({
+        collection: collectionConfig,
+        doc,
+        req,
+        user,
+      });
+
       return materializeDocument({
         collectionSlug: collection,
         depth,
         overrideAccess,
-        record: doc,
+        record: readable,
         req,
         select,
         user,
@@ -1127,6 +1377,17 @@ export function createOboeRuntime(args: {
       });
 
       if (doc) {
+        try {
+          await cleanupUploadedFile({
+            collection: collectionConfig,
+            file: getStoredFileData(doc.data.file),
+            req,
+            user,
+          });
+        } catch (error) {
+          console.error(error);
+        }
+
         await args.db.recordAudit?.({
           actor: user,
           at: new Date().toISOString(),
@@ -1174,12 +1435,17 @@ export function createOboeRuntime(args: {
       );
       const page = paginateDocuments(records, query);
       const docs = await Promise.all(
-        page.docs.map((record) =>
+        page.docs.map(async (record) =>
           materializeDocument({
             collectionSlug: collection,
             depth: query?.depth,
             overrideAccess,
-            record,
+            record: await runAfterRead({
+              collection: collectionConfig,
+              doc: record,
+              req,
+              user,
+            }),
             req,
             select: query?.select,
             user,
@@ -1226,6 +1492,14 @@ export function createOboeRuntime(args: {
     graphql,
     async initialize() {
       await args.db.initialize?.(schema);
+
+      for (const collection of schema.collections.values()) {
+        if (!collection.upload) {
+          continue;
+        }
+
+        await getCollectionStorageAdapter(collection).onInit?.();
+      }
     },
     jobs,
     schema,
@@ -1237,6 +1511,7 @@ export function createOboeRuntime(args: {
       collection,
       data,
       depth,
+      file,
       id,
       overrideAccess,
       req,
@@ -1264,19 +1539,63 @@ export function createOboeRuntime(args: {
         collection: collectionConfig,
         data,
         db: args.db,
+        file,
         operation: "update",
         originalDoc: existing,
         req,
         user,
       });
-      const updated = await args.db.update({
-        collection,
+      const previousFile = getStoredFileData(existing?.data.file);
+      const uploadedFile = await uploadCollectionFile({
+        collection: collectionConfig,
         data: candidateData,
-        id,
+        file,
+        req,
+        user,
       });
+      let updated: OboeRecord | null;
+      try {
+        updated = await args.db.update({
+          collection,
+          data: uploadedFile
+            ? {
+                ...candidateData,
+                file: uploadedFile,
+              }
+            : candidateData,
+          id,
+        });
+      } catch (error) {
+        await cleanupUploadedFile({
+          collection: collectionConfig,
+          file: uploadedFile,
+          req,
+          user,
+        });
+        throw error;
+      }
 
       if (!updated) {
+        await cleanupUploadedFile({
+          collection: collectionConfig,
+          file: uploadedFile,
+          req,
+          user,
+        });
         return null;
+      }
+
+      if (uploadedFile && previousFile) {
+        try {
+          await cleanupUploadedFile({
+            collection: collectionConfig,
+            file: previousFile,
+            req,
+            user,
+          });
+        } catch (error) {
+          console.error(error);
+        }
       }
 
       const doc = await runAfterChange({
@@ -1298,15 +1617,61 @@ export function createOboeRuntime(args: {
       });
       await events.emit(`${collection}.updated`, { collection, id });
 
+      const readable = await runAfterRead({
+        collection: collectionConfig,
+        doc,
+        req,
+        user,
+      });
+
       return materializeDocument({
         collectionSlug: collection,
         depth,
         overrideAccess,
-        record: doc,
+        record: readable,
         req,
         select,
         user,
       });
+    },
+    async downloadFile({ collection, id, overrideAccess, req, user }) {
+      const collectionConfig = getCompiledCollection(schema, collection);
+
+      if (
+        !(await canAccess({
+          collection: collectionConfig,
+          id,
+          operation: "read",
+          overrideAccess,
+          req,
+          user,
+        }))
+      ) {
+        throw new Error(`Access denied for read on "${collection}".`);
+      }
+
+      const record = await args.db.findById({
+        collection,
+        id,
+      });
+
+      if (!record) {
+        return null;
+      }
+
+      const storedFile = getStoredFileData(record.data.file);
+      if (!storedFile) {
+        return null;
+      }
+
+      return await getCollectionStorageAdapter(collectionConfig).handleDownload(
+        {
+          collection: collectionConfig,
+          file: storedFile,
+          req,
+          user,
+        }
+      );
     },
   };
 

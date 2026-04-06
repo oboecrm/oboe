@@ -4,6 +4,7 @@ import type {
   FieldConfig,
   ModuleConfig,
   OboeConfig,
+  StorageServeMode,
 } from "./types.js";
 
 function assertUnique(slug: string, seen: Set<string>, label: string) {
@@ -42,6 +43,19 @@ function validateRelationshipFields(
   }
 }
 
+function createStoredFileField(): FieldConfig {
+  return {
+    name: "file",
+    type: "json",
+  };
+}
+
+function normalizeServeMode(
+  value: StorageServeMode | undefined
+): StorageServeMode {
+  return value ?? "proxy";
+}
+
 export function compileSchema(config: OboeConfig): CompiledSchema {
   const moduleSlugs = new Set<string>();
   const collectionSlugs = new Set<string>();
@@ -56,6 +70,25 @@ export function compileSchema(config: OboeConfig): CompiledSchema {
 
     for (const collection of moduleConfig.collections) {
       assertUnique(collection.slug, collectionSlugs, "collection");
+
+      if (collection.storage && !collection.upload) {
+        throw new Error(
+          `Collection "${collection.slug}" cannot define storage without enabling upload.`
+        );
+      }
+
+      if (
+        collection.upload &&
+        collection.fields.some((field) => field.name === "file")
+      ) {
+        throw new Error(
+          `Upload-enabled collection "${collection.slug}" cannot define the reserved "file" field.`
+        );
+      }
+
+      const fields = collection.upload
+        ? [...collection.fields, createStoredFileField()]
+        : collection.fields;
       collections.set(collection.slug, {
         ...collection,
         admin: {
@@ -65,7 +98,14 @@ export function compileSchema(config: OboeConfig): CompiledSchema {
             ...collection.admin?.views,
           },
         },
+        fields,
         moduleSlug: moduleConfig.slug,
+        storage: collection.storage
+          ? {
+              ...collection.storage,
+              serveMode: normalizeServeMode(collection.storage.serveMode),
+            }
+          : undefined,
       });
     }
 

@@ -1,0 +1,25 @@
+{
+  "name": "@oboe/storage-vercel-blob",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "dependencies": {
+    "@oboe/core": "workspace:*",
+    "@oboe/plugin-storage": "workspace:*",
+    "@vercel/blob": "^2.0.0"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "dev": "tsc -p tsconfig.build.json --watch --preserveWatchOutput",
+    "lint": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  }
+}

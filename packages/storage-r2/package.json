@@ -1,0 +1,26 @@
+{
+  "name": "@oboe/storage-r2",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.821.0",
+    "@oboe/core": "workspace:*",
+    "@oboe/plugin-storage": "workspace:*",
+    "@oboe/storage-s3": "workspace:*"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "dev": "tsc -p tsconfig.build.json --watch --preserveWatchOutput",
+    "lint": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  }
+}

@@ -79,4 +79,62 @@ describe("defineConfig", () => {
       'Relationship field "contacts.company" refers to unknown collection "companies".'
     );
   });
+
+  it("rejects upload collections that define the reserved file field", () => {
+    expect(() =>
+      compileSchema(
+        defineConfig({
+          modules: [
+            defineModule({
+              collections: [
+                {
+                  fields: [
+                    {
+                      name: "file",
+                      type: "json",
+                    },
+                  ],
+                  slug: "media",
+                  upload: true,
+                },
+              ],
+              slug: "assets",
+            }),
+          ],
+        })
+      )
+    ).toThrow(
+      'Upload-enabled collection "media" cannot define the reserved "file" field.'
+    );
+  });
+
+  it("rejects storage config on collections without upload enabled", () => {
+    expect(() =>
+      compileSchema(
+        defineConfig({
+          modules: [
+            defineModule({
+              collections: [
+                {
+                  fields: [
+                    {
+                      name: "name",
+                      type: "text",
+                    },
+                  ],
+                  slug: "media",
+                  storage: {
+                    serveMode: "proxy",
+                  },
+                },
+              ],
+              slug: "assets",
+            }),
+          ],
+        })
+      )
+    ).toThrow(
+      'Collection "media" cannot define storage without enabling upload.'
+    );
+  });
 });

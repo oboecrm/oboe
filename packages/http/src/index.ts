@@ -4,6 +4,7 @@ import {
   type FieldConfig,
   type OboeRuntime,
   OboeValidationError,
+  type UploadInputFile,
 } from "@oboe/core";
 
 export interface HttpHandlerOptions {
@@ -27,6 +28,41 @@ function html(markup: string, status = 200) {
     },
     status,
   });
+}
+
+function isUploadCollection(collection: CompiledCollection) {
+  return Boolean(collection.upload);
+}
+
+function isStoredFileField(collection: CompiledCollection, field: FieldConfig) {
+  return isUploadCollection(collection) && field.name === "file";
+}
+
+function storedFileSchema() {
+  return {
+    additionalProperties: false,
+    properties: {
+      filename: { type: "string" },
+      filesize: { type: "number" },
+      mimeType: { type: "string" },
+      prefix: { type: "string" },
+      providerMetadata: {
+        additionalProperties: true,
+        type: "object",
+      },
+      storageAdapter: { type: "string" },
+      storageKey: { type: "string" },
+      url: { type: "string" },
+    },
+    required: [
+      "filename",
+      "filesize",
+      "mimeType",
+      "storageAdapter",
+      "storageKey",
+    ],
+    type: "object",
+  };
 }
 
 function schemaForField(field: FieldConfig) {
@@ -71,7 +107,12 @@ function documentSchema(collection: CompiledCollection) {
       id: { type: "string" },
       updatedAt: { format: "date-time", type: "string" },
       ...Object.fromEntries(
-        collection.fields.map((field) => [field.name, schemaForField(field)])
+        collection.fields.map((field) => [
+          field.name,
+          isStoredFileField(collection, field)
+            ? storedFileSchema()
+            : schemaForField(field),
+        ])
       ),
     },
     required: ["id", "createdAt", "updatedAt"],
@@ -80,16 +121,19 @@ function documentSchema(collection: CompiledCollection) {
 }
 
 function requestSchema(collection: CompiledCollection, partial = false) {
+  const requestFields = collection.fields.filter(
+    (field) => !isStoredFileField(collection, field)
+  );
   const required = partial
     ? []
-    : collection.fields
+    : requestFields
         .filter((field) => field.required)
         .map((field) => field.name);
 
   return {
     additionalProperties: false,
     properties: Object.fromEntries(
-      collection.fields.map((field) => {
+      requestFields.map((field) => {
         const schema =
           field.type === "relation" || field.type === "relationship"
             ? { type: "string" }
@@ -97,6 +141,37 @@ function requestSchema(collection: CompiledCollection, partial = false) {
         return [field.name, schema];
       })
     ),
+    required,
+    type: "object",
+  };
+}
+
+function multipartRequestSchema(
+  collection: CompiledCollection,
+  partial = false
+) {
+  const jsonSchema = requestSchema(collection, partial) as {
+    properties: Record<string, unknown>;
+    required?: string[];
+  };
+  const required = [
+    ...(jsonSchema.required?.length ? ["data"] : []),
+    ...(partial ? [] : ["file"]),
+  ];
+
+  return {
+    additionalProperties: false,
+    properties: {
+      data: {
+        properties: jsonSchema.properties,
+        required: jsonSchema.required ?? [],
+        type: "object",
+      },
+      file: {
+        format: "binary",
+        type: "string",
+      },
+    },
     required,
     type: "object",
   };
@@ -226,10 +301,14 @@ export function createOpenAPIDocument(runtime: OboeRuntime) {
       paginatedSchema(collection);
     components.schemas[`${collection.slug}CreateRequest`] =
       requestSchema(collection);
+    components.schemas[`${collection.slug}CreateMultipartRequest`] =
+      multipartRequestSchema(collection);
     components.schemas[`${collection.slug}UpdateRequest`] = requestSchema(
       collection,
       true
     );
+    components.schemas[`${collection.slug}UpdateMultipartRequest`] =
+      multipartRequestSchema(collection, true);
 
     paths[`/api/${collection.slug}`] = {
       get: {
@@ -255,9 +334,11 @@ export function createOpenAPIDocument(runtime: OboeRuntime) {
         ),
         requestBody: {
           content: {
-            "application/json": {
+            [collection.upload ? "multipart/form-data" : "application/json"]: {
               schema: {
-                $ref: `#/components/schemas/${collection.slug}CreateRequest`,
+                $ref: `#/components/schemas/${
+                  collection.slug
+                }${collection.upload ? "CreateMultipartRequest" : "CreateRequest"}`,
               },
             },
           },
@@ -375,6 +456,15 @@ export function createOpenAPIDocument(runtime: OboeRuntime) {
                 $ref: `#/components/schemas/${collection.slug}UpdateRequest`,
               },
             },
+            ...(collection.upload
+              ? {
+                  "multipart/form-data": {
+                    schema: {
+                      $ref: `#/components/schemas/${collection.slug}UpdateMultipartRequest`,
+                    },
+                  },
+                }
+              : {}),
           },
         },
         responses: {
@@ -391,6 +481,35 @@ export function createOpenAPIDocument(runtime: OboeRuntime) {
         },
       },
     };
+
+    if (collection.upload) {
+      paths[`/api/${collection.slug}/{id}/file`] = {
+        get: {
+          operationId: `download${collection.slug}File`,
+          parameters: [
+            {
+              in: "path",
+              name: "id",
+              required: true,
+              schema: { type: "string" },
+            },
+          ],
+          responses: {
+            "200": {
+              content: {
+                "*/*": {
+                  schema: {
+                    format: "binary",
+                    type: "string",
+                  },
+                },
+              },
+              description: "Download stored file",
+            },
+          },
+        },
+      };
+    }
   }
 
   return {
@@ -479,6 +598,43 @@ function normalizeSegments(url: URL, basePath: string) {
   return path.split("/").filter(Boolean);
 }
 
+function isMultipartRequest(request: Request) {
+  return request.headers
+    .get("content-type")
+    ?.toLowerCase()
+    .startsWith("multipart/form-data");
+}
+
+async function parseMultipartBody(request: Request): Promise<{
+  data: Record<string, unknown>;
+  file?: UploadInputFile;
+}> {
+  const formData = await request.formData();
+  const rawData = formData.get("data");
+  const rawFile = formData.get("file");
+
+  const data =
+    typeof rawData === "string" && rawData.length > 0
+      ? (JSON.parse(rawData) as Record<string, unknown>)
+      : {};
+
+  if (!(rawFile instanceof File)) {
+    return {
+      data,
+    };
+  }
+
+  return {
+    data,
+    file: {
+      buffer: new Uint8Array(await rawFile.arrayBuffer()),
+      filename: rawFile.name,
+      filesize: rawFile.size,
+      mimeType: rawFile.type || "application/octet-stream",
+    },
+  };
+}
+
 export function createHttpHandler(options: HttpHandlerOptions) {
   const basePath = options.basePath ?? "/api";
   const openApiDocument = () => createOpenAPIDocument(options.runtime);
@@ -557,6 +713,8 @@ export function createHttpHandler(options: HttpHandlerOptions) {
         );
       }
 
+      const collectionConfig = options.runtime.schema.collections.get(first);
+
       if (request.method === "GET" && second === "count") {
         return json(
           await options.runtime.count({
@@ -580,15 +738,50 @@ export function createHttpHandler(options: HttpHandlerOptions) {
       }
 
       if (request.method === "POST" && !second) {
-        const body = (await request.json()) as Record<string, unknown>;
+        if (collectionConfig?.upload && !isMultipartRequest(request)) {
+          return json(
+            {
+              error: `Collection "${first}" requires multipart/form-data uploads.`,
+            },
+            400
+          );
+        }
+
+        if (!collectionConfig?.upload && isMultipartRequest(request)) {
+          return json(
+            {
+              error: `Collection "${first}" does not accept multipart uploads.`,
+            },
+            400
+          );
+        }
+
+        const { data, file } =
+          collectionConfig?.upload && isMultipartRequest(request)
+            ? await parseMultipartBody(request)
+            : {
+                data: (await request.json()) as Record<string, unknown>,
+                file: undefined,
+              };
         const doc = await options.runtime.create({
           collection: first,
-          data: body,
+          data,
           depth: query.depth,
+          file,
           req: request,
           select: query.select,
         });
         return json(doc, 201);
+      }
+
+      if (request.method === "GET" && second && segments[2] === "file") {
+        const fileResponse = await options.runtime.downloadFile({
+          collection: first,
+          id: second,
+          req: request,
+        });
+
+        return fileResponse ?? json({ error: "Not found" }, 404);
       }
 
       if (request.method === "GET" && second) {
@@ -604,11 +797,27 @@ export function createHttpHandler(options: HttpHandlerOptions) {
       }
 
       if ((request.method === "PATCH" || request.method === "PUT") && second) {
-        const body = (await request.json()) as Record<string, unknown>;
+        if (!collectionConfig?.upload && isMultipartRequest(request)) {
+          return json(
+            {
+              error: `Collection "${first}" does not accept multipart uploads.`,
+            },
+            400
+          );
+        }
+
+        const { data, file } =
+          collectionConfig?.upload && isMultipartRequest(request)
+            ? await parseMultipartBody(request)
+            : {
+                data: (await request.json()) as Record<string, unknown>,
+                file: undefined,
+              };
         const doc = await options.runtime.update({
           collection: first,
-          data: body,
+          data,
           depth: query.depth,
+          file,
           id: second,
           req: request,
           select: query.select,

@@ -3,6 +3,12 @@ import { describe, expect, it } from "vitest";
 import { defineConfig, defineModule } from "./config.js";
 import { createOboeRuntime } from "./runtime.js";
 import { createMemoryAdapter } from "./testing/memory-adapter.js";
+import type {
+  AuditEntry,
+  CollectionQuery,
+  JobRequest,
+  OboeRecord,
+} from "./types.js";
 import { OboeValidationError } from "./types.js";
 
 describe("createOboeRuntime", () => {
@@ -642,5 +648,315 @@ describe("createOboeRuntime", () => {
     });
 
     expect(result.docs).toHaveLength(1);
+  });
+
+  it("stores upload metadata, resolves URLs, and deletes replaced files", async () => {
+    const uploads: string[] = [];
+    const deletes: string[] = [];
+    const runtime = createOboeRuntime({
+      config: defineConfig({
+        modules: [
+          defineModule({
+            collections: [
+              {
+                fields: [{ name: "name", type: "text" }],
+                slug: "media",
+                storage: {
+                  adapter: ({ prefix }) => ({
+                    generateURL({ file }) {
+                      return `https://cdn.example.com/${file.storageKey}`;
+                    },
+                    async handleDelete({ file }) {
+                      deletes.push(file.storageKey);
+                    },
+                    async handleDownload({ file }) {
+                      return new Response(file.filename);
+                    },
+                    async handleUpload({ file }) {
+                      const storageKey = prefix
+                        ? `${prefix}/${file.filename}`
+                        : file.filename;
+                      uploads.push(storageKey);
+                      return {
+                        filename: file.filename,
+                        filesize: file.filesize,
+                        mimeType: file.mimeType,
+                        prefix,
+                        storageAdapter: "test",
+                        storageKey,
+                      };
+                    },
+                    name: "test",
+                  }),
+                  prefix: "assets",
+                  serveMode: "direct",
+                },
+                upload: true,
+              },
+            ],
+            slug: "assets",
+          }),
+        ],
+      }),
+      db: createMemoryAdapter(),
+    });
+
+    const created = await runtime.create({
+      collection: "media",
+      data: {
+        name: "Avatar",
+      },
+      file: {
+        buffer: new Uint8Array([1, 2, 3]),
+        filename: "avatar.png",
+        filesize: 3,
+        mimeType: "image/png",
+      },
+    });
+
+    expect(created.file).toMatchObject({
+      filename: "avatar.png",
+      storageKey: "assets/avatar.png",
+      url: "https://cdn.example.com/assets/avatar.png",
+    });
+
+    const updated = await runtime.update({
+      collection: "media",
+      data: {
+        name: "Avatar v2",
+      },
+      file: {
+        buffer: new Uint8Array([4, 5, 6]),
+        filename: "avatar-v2.png",
+        filesize: 3,
+        mimeType: "image/png",
+      },
+      id: created.id,
+    });
+
+    expect(updated?.file).toMatchObject({
+      filename: "avatar-v2.png",
+      storageKey: "assets/avatar-v2.png",
+      url: "https://cdn.example.com/assets/avatar-v2.png",
+    });
+    expect(uploads).toEqual(["assets/avatar.png", "assets/avatar-v2.png"]);
+    expect(deletes).toEqual(["assets/avatar.png"]);
+
+    await runtime.delete({
+      collection: "media",
+      id: created.id,
+    });
+
+    expect(deletes).toEqual(["assets/avatar.png", "assets/avatar-v2.png"]);
+  });
+
+  it("cleans up uploaded files when create or update persistence fails", async () => {
+    const deletedOnCreateFailure: string[] = [];
+    const createFailureRuntime = createOboeRuntime({
+      config: defineConfig({
+        modules: [
+          defineModule({
+            collections: [
+              {
+                fields: [{ name: "name", type: "text" }],
+                slug: "media",
+                storage: {
+                  adapter: () => ({
+                    async handleDelete({ file }) {
+                      deletedOnCreateFailure.push(file.storageKey);
+                    },
+                    async handleDownload() {
+                      return new Response(null, { status: 204 });
+                    },
+                    async handleUpload({ file }) {
+                      return {
+                        filename: file.filename,
+                        filesize: file.filesize,
+                        mimeType: file.mimeType,
+                        storageAdapter: "test",
+                        storageKey: `create/${file.filename}`,
+                      };
+                    },
+                    name: "test",
+                  }),
+                },
+                upload: true,
+              },
+            ],
+            slug: "assets",
+          }),
+        ],
+      }),
+      db: {
+        async create() {
+          throw new Error("create failed");
+        },
+        async delete() {
+          return null;
+        },
+        async find() {
+          return [];
+        },
+        async findById() {
+          return null;
+        },
+        async update() {
+          return null;
+        },
+      },
+    });
+
+    await expect(
+      createFailureRuntime.create({
+        collection: "media",
+        data: {
+          name: "Broken",
+        },
+        file: {
+          buffer: new Uint8Array([1]),
+          filename: "broken.png",
+          filesize: 1,
+          mimeType: "image/png",
+        },
+      })
+    ).rejects.toThrow("create failed");
+    expect(deletedOnCreateFailure).toEqual(["create/broken.png"]);
+
+    const failingAdapter = createMemoryAdapter();
+    const seedRuntime = createOboeRuntime({
+      config: defineConfig({
+        modules: [
+          defineModule({
+            collections: [
+              {
+                fields: [{ name: "name", type: "text" }],
+                slug: "media",
+                storage: {
+                  adapter: () => ({
+                    async handleDelete() {},
+                    async handleDownload() {
+                      return new Response(null, { status: 204 });
+                    },
+                    async handleUpload({ file }) {
+                      return {
+                        filename: file.filename,
+                        filesize: file.filesize,
+                        mimeType: file.mimeType,
+                        storageAdapter: "test",
+                        storageKey: `seed/${file.filename}`,
+                      };
+                    },
+                    name: "test",
+                  }),
+                },
+                upload: true,
+              },
+            ],
+            slug: "assets",
+          }),
+        ],
+      }),
+      db: failingAdapter,
+    });
+
+    const existing = await seedRuntime.create({
+      collection: "media",
+      data: {
+        name: "Seed",
+      },
+      file: {
+        buffer: new Uint8Array([1]),
+        filename: "seed.png",
+        filesize: 1,
+        mimeType: "image/png",
+      },
+    });
+
+    const deletedOnUpdateFailure: string[] = [];
+    const forwardingDb = {
+      audits: failingAdapter.audits,
+      jobs: failingAdapter.jobs,
+      store: failingAdapter.store,
+      async create(args: Parameters<typeof failingAdapter.create>[0]) {
+        return failingAdapter.create(args);
+      },
+      async delete(args: Parameters<typeof failingAdapter.delete>[0]) {
+        return failingAdapter.delete(args);
+      },
+      async enqueueJob(job: JobRequest) {
+        return failingAdapter.enqueueJob(job);
+      },
+      async find(args: { collection: string; query?: CollectionQuery }) {
+        return failingAdapter.find(args);
+      },
+      async findById(args: { collection: string; id: string }) {
+        return failingAdapter.findById(args);
+      },
+      async recordAudit(entry: AuditEntry) {
+        return failingAdapter.recordAudit(entry);
+      },
+      async update(_args: {
+        collection: string;
+        data: Record<string, unknown>;
+        id: string;
+      }): Promise<OboeRecord | null> {
+        throw new Error("update failed");
+      },
+    };
+    const updateFailureRuntime = createOboeRuntime({
+      config: defineConfig({
+        modules: [
+          defineModule({
+            collections: [
+              {
+                fields: [{ name: "name", type: "text" }],
+                slug: "media",
+                storage: {
+                  adapter: () => ({
+                    async handleDelete({ file }) {
+                      deletedOnUpdateFailure.push(file.storageKey);
+                    },
+                    async handleDownload() {
+                      return new Response(null, { status: 204 });
+                    },
+                    async handleUpload({ file }) {
+                      return {
+                        filename: file.filename,
+                        filesize: file.filesize,
+                        mimeType: file.mimeType,
+                        storageAdapter: "test",
+                        storageKey: `update/${file.filename}`,
+                      };
+                    },
+                    name: "test",
+                  }),
+                },
+                upload: true,
+              },
+            ],
+            slug: "assets",
+          }),
+        ],
+      }),
+      db: forwardingDb,
+    });
+
+    await expect(
+      updateFailureRuntime.update({
+        collection: "media",
+        data: {
+          name: "Broken update",
+        },
+        file: {
+          buffer: new Uint8Array([2]),
+          filename: "update.png",
+          filesize: 1,
+          mimeType: "image/png",
+        },
+        id: existing.id,
+      })
+    ).rejects.toThrow("update failed");
+
+    expect(deletedOnUpdateFailure).toEqual(["update/update.png"]);
   });
 });
