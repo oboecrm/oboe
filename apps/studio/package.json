@@ -15,9 +15,9 @@
     "@oboe/graphql": "workspace:*",
     "@oboe/http": "workspace:*",
     "@oboe/jobs": "workspace:*",
-    "next": "^15.2.2",
+    "next": "^16.2.2",
     "pg": "^8.13.3",
-    "react": "^19.0.0",
-    "react-dom": "^19.0.0"
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4"
   }
 }
