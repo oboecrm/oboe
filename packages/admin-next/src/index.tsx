@@ -1,7 +1,7 @@
 import type {
   CompiledCollection,
   FieldConfig,
-  OboeRecord,
+  OboeDocument,
   OboeRuntime,
 } from "@oboe/core";
 import React from "react";
@@ -269,7 +269,7 @@ export function AdminDashboard(props: { runtime: OboeRuntime }) {
 export function CollectionListView(props: {
   basePath?: string;
   collection: CompiledCollection;
-  docs: OboeRecord[];
+  docs: OboeDocument[];
 }) {
   const basePath = props.basePath ?? "/admin";
   const columns = props.collection.admin?.defaultColumns?.length
@@ -337,7 +337,7 @@ export function CollectionListView(props: {
                   </a>
                 </td>
                 {columns.map((column) => (
-                  <td key={column}>{formatValue(doc.data[column])}</td>
+                  <td key={column}>{formatValue(doc[column])}</td>
                 ))}
               </tr>
             ))}
@@ -350,7 +350,7 @@ export function CollectionListView(props: {
 
 export function RecordDetailView(props: {
   collection: CompiledCollection;
-  doc: OboeRecord;
+  doc: OboeDocument;
 }) {
   return (
     <div style={shellStyle}>
@@ -360,7 +360,7 @@ export function RecordDetailView(props: {
         </p>
         <h1 style={{ marginTop: 0 }}>
           {String(
-            props.doc.data[props.collection.admin?.titleField ?? "id"] ??
+            props.doc[props.collection.admin?.titleField ?? "id"] ??
               props.doc.id
           )}
         </h1>
@@ -377,7 +377,7 @@ export function RecordDetailView(props: {
           {props.collection.fields.map((field) => (
             <React.Fragment key={field.name}>
               <dt>{field.label ?? field.name}</dt>
-              <dd>{renderDetailValue(props.doc.data[field.name])}</dd>
+              <dd>{renderDetailValue(props.doc[field.name])}</dd>
             </React.Fragment>
           ))}
         </dl>
@@ -428,14 +428,14 @@ export function RecordCreateView(props: {
 }
 
 export function PipelineView(props: {
-  docs: OboeRecord[];
+  docs: OboeDocument[];
   stageField?: string;
 }) {
   const stageField = props.stageField ?? "stage";
-  const groups = new Map<string, OboeRecord[]>();
+  const groups = new Map<string, OboeDocument[]>();
 
   for (const doc of props.docs) {
-    const stage = String(doc.data[stageField] ?? "unassigned");
+    const stage = String(doc[stageField] ?? "unassigned");
     const bucket = groups.get(stage) ?? [];
     bucket.push(doc);
     groups.set(stage, bucket);
@@ -460,10 +460,8 @@ export function PipelineView(props: {
                 paddingTop: "12px",
               }}
             >
-              <strong>{String(doc.data.name ?? doc.id)}</strong>
-              <div style={mutedStyle}>
-                {String(doc.data.owner ?? "Unassigned")}
-              </div>
+              <strong>{String(doc.name ?? doc.id)}</strong>
+              <div style={mutedStyle}>{String(doc.owner ?? "Unassigned")}</div>
             </article>
           ))}
         </section>
@@ -472,7 +470,7 @@ export function PipelineView(props: {
   );
 }
 
-export function TimelineView(props: { docs: OboeRecord[] }) {
+export function TimelineView(props: { docs: OboeDocument[] }) {
   return (
     <div style={panelStyle}>
       <h2 style={{ marginTop: 0 }}>Timeline</h2>
@@ -484,11 +482,11 @@ export function TimelineView(props: { docs: OboeRecord[] }) {
             paddingTop: "12px",
           }}
         >
-          <strong>{String(doc.data.type ?? "activity")}</strong>
+          <strong>{String(doc.type ?? "activity")}</strong>
           <div style={mutedStyle}>
             {new Date(doc.updatedAt).toLocaleString()}
           </div>
-          <p>{String(doc.data.summary ?? doc.data.name ?? "")}</p>
+          <p>{String(doc.summary ?? doc.name ?? "")}</p>
         </article>
       ))}
     </div>

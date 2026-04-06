@@ -12,6 +12,7 @@ export type FieldType =
 
 export interface BaseFieldConfig {
   label?: string;
+  maxDepth?: number;
   name: string;
   required?: boolean;
 }
@@ -238,12 +239,47 @@ export interface JobsConfig {
   retryLimit?: number;
 }
 
+export interface GraphQLConfig {
+  mutations?: (args: {
+    GraphQL: unknown;
+    oboe: OboeRuntime;
+  }) => Record<string, unknown>;
+  queries?: (args: {
+    GraphQL: unknown;
+    oboe: OboeRuntime;
+  }) => Record<string, unknown>;
+}
+
+export interface ServerFunctionContext<TInput = Record<string, unknown>> {
+  input: TInput;
+  oboe: OboeRuntime;
+  req?: Request;
+  user?: unknown;
+}
+
+export interface ServerFunctionRestConfig {
+  method?: "DELETE" | "GET" | "PATCH" | "POST" | "PUT";
+  path?: string;
+}
+
+export interface ServerFunctionConfig<
+  TInput = Record<string, unknown>,
+  TOutput = unknown,
+> {
+  handler: (
+    context: ServerFunctionContext<TInput>
+  ) => Promise<TOutput> | TOutput;
+  rest?: ServerFunctionRestConfig;
+}
+
 export interface OboeConfig {
   admin?: AdminConfig;
   auth?: AuthConfig;
+  graphQL?: GraphQLConfig;
   jobs?: JobsConfig;
   modules: ModuleConfig[];
   plugins?: PluginConfig[];
+  serverFunctions?: Record<string, ServerFunctionConfig>;
 }
 
 export interface CompiledCollection extends CollectionConfig {
@@ -257,9 +293,46 @@ export interface CompiledSchema {
   modules: Map<string, ModuleConfig>;
 }
 
+export type SortDirection = "asc" | "desc";
+
+export type SortParam = string | string[];
+
+export type SelectNode = boolean | SelectShape;
+
+export interface SelectShape {
+  [key: string]: SelectNode;
+}
+
+export interface FieldWhereOperators {
+  contains?: string;
+  endsWith?: string;
+  eq?: unknown;
+  exists?: boolean;
+  gt?: number | string;
+  gte?: number | string;
+  in?: unknown[];
+  like?: string;
+  lt?: number | string;
+  lte?: number | string;
+  ne?: unknown;
+  notIn?: unknown[];
+  startsWith?: string;
+}
+
+export interface CollectionWhere {
+  and?: CollectionWhere[];
+  or?: CollectionWhere[];
+  [field: string]: CollectionWhere[] | FieldWhereOperators | unknown;
+}
+
 export interface CollectionQuery {
+  depth?: number;
   limit?: number;
-  where?: Record<string, unknown>;
+  page?: number;
+  pagination?: boolean;
+  select?: SelectShape;
+  sort?: SortParam;
+  where?: CollectionWhere;
 }
 
 export interface OboeRecord {
@@ -268,6 +341,30 @@ export interface OboeRecord {
   data: Record<string, unknown>;
   id: string;
   updatedAt: string;
+}
+
+export interface OboeDocument {
+  createdAt: string;
+  id: string;
+  updatedAt: string;
+  [key: string]: unknown;
+}
+
+export interface FindResult<TDocument = OboeDocument> {
+  docs: TDocument[];
+  hasNextPage: boolean;
+  hasPrevPage: boolean;
+  limit: number;
+  nextPage: number | null;
+  page: number;
+  pagingCounter: number;
+  prevPage: number | null;
+  totalDocs: number;
+  totalPages: number;
+}
+
+export interface CountResult {
+  totalDocs: number;
 }
 
 export interface AuditEntry {
@@ -340,22 +437,42 @@ export interface OboeRuntime {
   auth: {
     collection: () => string | undefined;
   };
+  callServerFunction: <
+    TInput = Record<string, unknown>,
+    TOutput = unknown,
+  >(args: {
+    input?: TInput;
+    name: string;
+    req?: Request;
+    user?: unknown;
+  }) => Promise<TOutput>;
   config: OboeConfig;
+  count: (args: {
+    collection: string;
+    overrideAccess?: boolean;
+    query?: Pick<CollectionQuery, "where">;
+    req?: Request;
+    user?: unknown;
+  }) => Promise<CountResult>;
   create: (args: {
     collection: string;
     data: Record<string, unknown>;
+    depth?: number;
     overrideAccess?: boolean;
     req?: Request;
+    select?: SelectShape;
     user?: unknown;
-  }) => Promise<OboeRecord>;
+  }) => Promise<OboeDocument>;
   db: DatabaseAdapter;
   delete: (args: {
     collection: string;
+    depth?: number;
     id: string;
     overrideAccess?: boolean;
     req?: Request;
+    select?: SelectShape;
     user?: unknown;
-  }) => Promise<OboeRecord | null>;
+  }) => Promise<OboeDocument | null>;
   events: EventBus;
   find: (args: {
     collection: string;
@@ -363,14 +480,16 @@ export interface OboeRuntime {
     query?: CollectionQuery;
     req?: Request;
     user?: unknown;
-  }) => Promise<OboeRecord[]>;
+  }) => Promise<FindResult>;
   findById: (args: {
     collection: string;
+    depth?: number;
     id: string;
     overrideAccess?: boolean;
     req?: Request;
+    select?: SelectShape;
     user?: unknown;
-  }) => Promise<OboeRecord | null>;
+  }) => Promise<OboeDocument | null>;
   graphql: GraphQLExecutor;
   initialize: () => Promise<void>;
   jobs: JobDispatcher;
@@ -379,11 +498,13 @@ export interface OboeRuntime {
   update: (args: {
     collection: string;
     data: Record<string, unknown>;
+    depth?: number;
     id: string;
     overrideAccess?: boolean;
     req?: Request;
+    select?: SelectShape;
     user?: unknown;
-  }) => Promise<OboeRecord | null>;
+  }) => Promise<OboeDocument | null>;
 }
 
 export type CollectionOperation = "create" | "delete" | "read" | "update";

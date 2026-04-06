@@ -1,3 +1,4 @@
+import { matchesWhere as queryMatchesWhere, sortRecords } from "../query.js";
 import type {
   AuditEntry,
   CollectionQuery,
@@ -8,14 +9,6 @@ import type {
 
 function randomId() {
   return Math.random().toString(36).slice(2, 10);
-}
-
-function matchesWhere(doc: OboeRecord, where?: Record<string, unknown>) {
-  if (!where) {
-    return true;
-  }
-
-  return Object.entries(where).every(([key, value]) => doc.data[key] === value);
 }
 
 export class MemoryAdapter implements DatabaseAdapter {
@@ -64,8 +57,11 @@ export class MemoryAdapter implements DatabaseAdapter {
   }): Promise<OboeRecord[]> {
     const bucket =
       this.store.get(args.collection) ?? new Map<string, OboeRecord>();
-    const docs = [...bucket.values()].filter((doc) =>
-      matchesWhere(doc, args.query?.where)
+    const docs = sortRecords(
+      [...bucket.values()].filter((doc) =>
+        queryMatchesWhere(doc, args.query?.where)
+      ),
+      args.query?.sort
     );
 
     if (args.query?.limit) {

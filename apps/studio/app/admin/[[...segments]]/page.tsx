@@ -123,7 +123,7 @@ export default async function AdminPage(props: {
       return <RecordDetailView collection={collection} doc={doc} />;
     }
 
-    const docs = await runtime.find({
+    const result = await runtime.find({
       collection: collection.slug,
     });
     const selectedView = Array.isArray(searchParams.view)
@@ -133,7 +133,7 @@ export default async function AdminPage(props: {
     if (selectedView === "pipeline") {
       return (
         <main style={{ padding: "32px" }}>
-          <PipelineView docs={docs} />
+          <PipelineView docs={result.docs} />
         </main>
       );
     }
@@ -141,7 +141,7 @@ export default async function AdminPage(props: {
     if (selectedView === "timeline") {
       return (
         <main style={{ padding: "32px" }}>
-          <TimelineView docs={docs} />
+          <TimelineView docs={result.docs} />
         </main>
       );
     }
@@ -154,7 +154,7 @@ export default async function AdminPage(props: {
       );
     }
 
-    return <CollectionListView collection={collection} docs={docs} />;
+    return <CollectionListView collection={collection} docs={result.docs} />;
   } catch (error) {
     const message =
       error instanceof Error ? error.message : "Unknown studio boot error";

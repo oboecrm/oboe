@@ -1,8 +1,17 @@
 import { createEventBus } from "./events.js";
+import {
+  applySelect,
+  defaultDepth,
+  matchesWhere,
+  paginateDocuments,
+  sortRecords,
+} from "./query.js";
 import { compileSchema, getCompiledCollection } from "./schema.js";
 import type {
   CollectionConfig,
+  CollectionQuery,
   CollectionValidationContext,
+  CountResult,
   DatabaseAdapter,
   EventBus,
   FieldConfig,
@@ -11,11 +20,13 @@ import type {
   JobDispatcher,
   JobRequest,
   OboeConfig,
+  OboeDocument,
   OboeRecord,
   OboeRuntime,
   SchemaAdapter,
   SchemaParseFailure,
   SchemaParseResult,
+  SelectShape,
   StandardSchemaIssue,
   StandardSchemaLike,
   ValidationIssue,
@@ -267,7 +278,6 @@ function builtInFieldIssues(args: {
   data: Record<string, unknown>;
   db: DatabaseAdapter;
   field: FieldConfig;
-  schema: ReturnType<typeof compileSchema>;
 }) {
   const path = [args.field.name];
   const value = args.data[args.field.name];
@@ -408,7 +418,6 @@ async function runBuiltInFieldValidation(args: {
   candidateData: Record<string, unknown>;
   collection: CollectionConfig;
   db: DatabaseAdapter;
-  schema: ReturnType<typeof compileSchema>;
 }) {
   const issues: ValidationIssue[] = [];
 
@@ -418,7 +427,6 @@ async function runBuiltInFieldValidation(args: {
       data: args.candidateData,
       db: args.db,
       field,
-      schema: args.schema,
     });
 
     for (const issue of builtInIssues) {
@@ -542,7 +550,7 @@ async function runCollectionSchemaValidation(args: {
   if (!args.collection.schema) {
     return {
       candidateData: args.candidateData,
-      issues: [] as ValidationIssue[],
+      issues: [],
     };
   }
 
@@ -582,7 +590,7 @@ async function runCollectionSchemaValidation(args: {
 
   return {
     candidateData: result.value,
-    issues: [] as ValidationIssue[],
+    issues: [],
   };
 }
 
@@ -637,8 +645,7 @@ function createJobDispatcher(
 }
 
 async function canAccess(args: {
-  collectionSlug: string;
-  config: OboeConfig;
+  collection: CollectionConfig;
   data?: Record<string, unknown>;
   id?: string;
   operation: "create" | "delete" | "read" | "update";
@@ -650,11 +657,7 @@ async function canAccess(args: {
     return true;
   }
 
-  const collection = getCompiledCollection(
-    compileSchema(args.config),
-    args.collectionSlug
-  );
-  const resolver = collection.access?.[args.operation];
+  const resolver = args.collection.access?.[args.operation];
 
   if (!resolver) {
     return true;
@@ -662,7 +665,7 @@ async function canAccess(args: {
 
   return resolver({
     action: args.operation,
-    collection,
+    collection: args.collection,
     data: args.data,
     id: args.id,
     req: args.req,
@@ -671,24 +674,18 @@ async function canAccess(args: {
 }
 
 async function runAfterRead(args: {
-  collectionSlug: string;
-  config: OboeConfig;
+  collection: CollectionConfig;
   doc: OboeRecord;
-  operation: "read";
   req?: Request;
   user?: unknown;
 }) {
-  const collection = getCompiledCollection(
-    compileSchema(args.config),
-    args.collectionSlug
-  );
   let doc = args.doc;
 
-  for (const hook of collection.hooks?.afterRead ?? []) {
+  for (const hook of args.collection.hooks?.afterRead ?? []) {
     doc = await hook({
       context: {
-        collection,
-        operation: args.operation,
+        collection: args.collection,
+        operation: "read",
         req: args.req,
         user: args.user,
       },
@@ -700,24 +697,19 @@ async function runAfterRead(args: {
 }
 
 async function runBeforeChange(args: {
-  collectionSlug: string;
-  config: OboeConfig;
+  collection: CollectionConfig;
   data: Record<string, unknown>;
   operation: "create" | "update";
   originalDoc?: OboeRecord | null;
   req?: Request;
   user?: unknown;
 }) {
-  const collection = getCompiledCollection(
-    compileSchema(args.config),
-    args.collectionSlug
-  );
   let data = args.data;
 
-  for (const hook of collection.hooks?.beforeChange ?? []) {
+  for (const hook of args.collection.hooks?.beforeChange ?? []) {
     data = await hook({
       context: {
-        collection,
+        collection: args.collection,
         operation: args.operation,
         req: args.req,
         user: args.user,
@@ -731,24 +723,19 @@ async function runBeforeChange(args: {
 }
 
 async function runAfterChange(args: {
-  collectionSlug: string;
-  config: OboeConfig;
+  collection: CollectionConfig;
   doc: OboeRecord;
   operation: "create" | "update";
   originalDoc?: OboeRecord | null;
   req?: Request;
   user?: unknown;
 }) {
-  const collection = getCompiledCollection(
-    compileSchema(args.config),
-    args.collectionSlug
-  );
   let doc = args.doc;
 
-  for (const hook of collection.hooks?.afterChange ?? []) {
+  for (const hook of args.collection.hooks?.afterChange ?? []) {
     doc = await hook({
       context: {
-        collection,
+        collection: args.collection,
         operation: args.operation,
         req: args.req,
         user: args.user,
@@ -762,20 +749,16 @@ async function runAfterChange(args: {
 }
 
 async function prepareValidatedData(args: {
-  collectionSlug: string;
-  config: OboeConfig;
+  collection: CollectionConfig;
   data: Record<string, unknown>;
   db: DatabaseAdapter;
   operation: "create" | "update";
   originalDoc?: OboeRecord | null;
   req?: Request;
-  schema: ReturnType<typeof compileSchema>;
   user?: unknown;
 }) {
-  const collection = getCompiledCollection(args.schema, args.collectionSlug);
   const nextData = await runBeforeChange({
-    collectionSlug: args.collectionSlug,
-    config: args.config,
+    collection: args.collection,
     data: args.data,
     operation: args.operation,
     originalDoc: args.originalDoc,
@@ -794,15 +777,14 @@ async function prepareValidatedData(args: {
   issues.push(
     ...(await runBuiltInFieldValidation({
       candidateData,
-      collection,
+      collection: args.collection,
       db: args.db,
-      schema: args.schema,
     }))
   );
   issues.push(
     ...(await runFieldSchemaValidation({
       candidateData,
-      collection,
+      collection: args.collection,
       operation: args.operation,
       originalDoc: args.originalDoc,
       req: args.req,
@@ -812,7 +794,7 @@ async function prepareValidatedData(args: {
   issues.push(
     ...(await runFieldValidatorValidation({
       candidateData,
-      collection,
+      collection: args.collection,
       operation: args.operation,
       originalDoc: args.originalDoc,
       req: args.req,
@@ -822,7 +804,7 @@ async function prepareValidatedData(args: {
 
   const collectionSchemaResult = await runCollectionSchemaValidation({
     candidateData,
-    collection,
+    collection: args.collection,
     operation: args.operation,
     originalDoc: args.originalDoc,
     req: args.req,
@@ -835,7 +817,7 @@ async function prepareValidatedData(args: {
     issues.push(
       ...(await runCollectionValidatorValidation({
         candidateData,
-        collection,
+        collection: args.collection,
         operation: args.operation,
         originalDoc: args.originalDoc,
         req: args.req,
@@ -849,6 +831,15 @@ async function prepareValidatedData(args: {
   }
 
   return candidateData;
+}
+
+function toPublicDocument(record: OboeRecord): OboeDocument {
+  return {
+    ...record.data,
+    createdAt: record.createdAt,
+    id: record.id,
+    updatedAt: record.updatedAt,
+  };
 }
 
 export function createOboeRuntime(args: {
@@ -867,20 +858,197 @@ export function createOboeRuntime(args: {
   const jobs = createJobDispatcher(args.db, fallbackJobs);
   let graphql = noopGraphQLExecutor;
 
-  return {
+  const loadVisibleRecord = async (loadArgs: {
+    collectionSlug: string;
+    id: string;
+    overrideAccess?: boolean;
+    req?: Request;
+    user?: unknown;
+  }) => {
+    const collection = getCompiledCollection(schema, loadArgs.collectionSlug);
+
+    if (
+      !(await canAccess({
+        collection,
+        id: loadArgs.id,
+        operation: "read",
+        overrideAccess: loadArgs.overrideAccess,
+        req: loadArgs.req,
+        user: loadArgs.user,
+      }))
+    ) {
+      throw new Error(`Access denied for read on "${collection.slug}".`);
+    }
+
+    const record = await args.db.findById({
+      collection: collection.slug,
+      id: loadArgs.id,
+    });
+
+    if (!record) {
+      return null;
+    }
+
+    return runAfterRead({
+      collection,
+      doc: record,
+      req: loadArgs.req,
+      user: loadArgs.user,
+    });
+  };
+
+  const materializeDocument = async (materializeArgs: {
+    collectionSlug: string;
+    depth?: number;
+    overrideAccess?: boolean;
+    record: OboeRecord;
+    req?: Request;
+    select?: SelectShape;
+    seen?: Set<string>;
+    user?: unknown;
+  }): Promise<OboeDocument> => {
+    const collection = getCompiledCollection(
+      schema,
+      materializeArgs.collectionSlug
+    );
+    const seen = materializeArgs.seen ?? new Set<string>();
+    const nextDepth = defaultDepth(materializeArgs.depth);
+    const key = `${materializeArgs.collectionSlug}:${materializeArgs.record.id}`;
+    const baseDocument = toPublicDocument(materializeArgs.record);
+
+    if (seen.has(key)) {
+      return applySelect(baseDocument, materializeArgs.select);
+    }
+
+    seen.add(key);
+
+    for (const field of collection.fields) {
+      if (!isRelationshipField(field) || !field.relationTo) {
+        continue;
+      }
+
+      const rawValue = baseDocument[field.name];
+      if (typeof rawValue !== "string") {
+        continue;
+      }
+
+      const allowedDepth =
+        field.maxDepth === undefined
+          ? nextDepth
+          : Math.min(nextDepth, field.maxDepth);
+
+      if (allowedDepth <= 0) {
+        continue;
+      }
+
+      const nestedSelect =
+        materializeArgs.select &&
+        isPlainObject(materializeArgs.select[field.name])
+          ? (materializeArgs.select[field.name] as SelectShape)
+          : undefined;
+
+      const related = await loadVisibleRecord({
+        collectionSlug: field.relationTo,
+        id: rawValue,
+        overrideAccess: materializeArgs.overrideAccess,
+        req: materializeArgs.req,
+        user: materializeArgs.user,
+      }).catch(() => null);
+
+      if (!related) {
+        continue;
+      }
+
+      baseDocument[field.name] = await materializeDocument({
+        collectionSlug: field.relationTo,
+        depth: allowedDepth - 1,
+        overrideAccess: materializeArgs.overrideAccess,
+        record: related,
+        req: materializeArgs.req,
+        seen,
+        select: nestedSelect,
+        user: materializeArgs.user,
+      });
+    }
+
+    return applySelect(baseDocument, materializeArgs.select);
+  };
+
+  const filterRecords = (records: OboeRecord[], query?: CollectionQuery) =>
+    sortRecords(
+      records.filter((record) => matchesWhere(record, query?.where)),
+      query?.sort
+    );
+
+  const countRecords = (records: OboeRecord[]): CountResult => ({
+    totalDocs: records.length,
+  });
+
+  const runtime: OboeRuntime = {
     auth: {
       collection() {
         return args.config.auth?.collection;
       },
     },
+    async callServerFunction<
+      TInput = Record<string, unknown>,
+      TOutput = unknown,
+    >(callArgs: {
+      input?: TInput;
+      name: string;
+      req?: Request;
+      user?: unknown;
+    }) {
+      const { input, name, req, user } = callArgs;
+      const definition = args.config.serverFunctions?.[name];
+
+      if (!definition) {
+        throw new Error(`Unknown server function "${name}".`);
+      }
+
+      return (await definition.handler({
+        input: (input ?? {}) as Record<string, unknown>,
+        oboe: runtime,
+        req,
+        user,
+      })) as TOutput;
+    },
     config: args.config,
-    async create({ collection, data, overrideAccess, req, user }) {
+    async count({ collection, overrideAccess, query, req, user }) {
       const collectionConfig = getCompiledCollection(schema, collection);
 
       if (
         !(await canAccess({
-          collectionSlug: collection,
-          config: args.config,
+          collection: collectionConfig,
+          operation: "read",
+          overrideAccess,
+          req,
+          user,
+        }))
+      ) {
+        throw new Error(`Access denied for read on "${collection}".`);
+      }
+
+      const records = await args.db.find({
+        collection,
+      });
+
+      return countRecords(filterRecords(records, { where: query?.where }));
+    },
+    async create({
+      collection,
+      data,
+      depth,
+      overrideAccess,
+      req,
+      select,
+      user,
+    }) {
+      const collectionConfig = getCompiledCollection(schema, collection);
+
+      if (
+        !(await canAccess({
+          collection: collectionConfig,
           data,
           operation: "create",
           overrideAccess,
@@ -894,13 +1062,11 @@ export function createOboeRuntime(args: {
       }
 
       const candidateData = await prepareValidatedData({
-        collectionSlug: collection,
-        config: args.config,
+        collection: collectionConfig,
         data,
         db: args.db,
         operation: "create",
         req,
-        schema,
         user,
       });
       const created = await args.db.create({
@@ -908,8 +1074,7 @@ export function createOboeRuntime(args: {
         data: candidateData,
       });
       const doc = await runAfterChange({
-        collectionSlug: collection,
-        config: args.config,
+        collection: collectionConfig,
         doc: created,
         operation: "create",
         req,
@@ -929,14 +1094,23 @@ export function createOboeRuntime(args: {
         id: doc.id,
       });
 
-      return doc;
+      return materializeDocument({
+        collectionSlug: collection,
+        depth,
+        overrideAccess,
+        record: doc,
+        req,
+        select,
+        user,
+      });
     },
     db: args.db,
-    async delete({ collection, id, overrideAccess, req, user }) {
+    async delete({ collection, depth, id, overrideAccess, req, select, user }) {
+      const collectionConfig = getCompiledCollection(schema, collection);
+
       if (
         !(await canAccess({
-          collectionSlug: collection,
-          config: args.config,
+          collection: collectionConfig,
           id,
           operation: "delete",
           overrideAccess,
@@ -964,14 +1138,25 @@ export function createOboeRuntime(args: {
         await events.emit(`${collection}.deleted`, { collection, id });
       }
 
-      return doc;
+      return doc
+        ? materializeDocument({
+            collectionSlug: collection,
+            depth,
+            overrideAccess,
+            record: doc,
+            req,
+            select,
+            user,
+          })
+        : null;
     },
     events,
     async find({ collection, overrideAccess, query, req, user }) {
+      const collectionConfig = getCompiledCollection(schema, collection);
+
       if (
         !(await canAccess({
-          collectionSlug: collection,
-          config: args.config,
+          collection: collectionConfig,
           operation: "read",
           overrideAccess,
           req,
@@ -981,58 +1166,64 @@ export function createOboeRuntime(args: {
         throw new Error(`Access denied for read on "${collection}".`);
       }
 
-      const docs = await args.db.find({
-        collection,
-        query,
-      });
-
-      return Promise.all(
-        docs.map((doc) =>
-          runAfterRead({
+      const records = filterRecords(
+        await args.db.find({
+          collection,
+        }),
+        query
+      );
+      const page = paginateDocuments(records, query);
+      const docs = await Promise.all(
+        page.docs.map((record) =>
+          materializeDocument({
             collectionSlug: collection,
-            config: args.config,
-            doc,
-            operation: "read",
+            depth: query?.depth,
+            overrideAccess,
+            record,
             req,
+            select: query?.select,
             user,
           })
         )
       );
-    },
-    async findById({ collection, id, overrideAccess, req, user }) {
-      if (
-        !(await canAccess({
-          collectionSlug: collection,
-          config: args.config,
-          id,
-          operation: "read",
-          overrideAccess,
-          req,
-          user,
-        }))
-      ) {
-        throw new Error(`Access denied for read on "${collection}".`);
-      }
 
-      const doc = await args.db.findById({
-        collection,
+      return {
+        ...page,
+        docs,
+      };
+    },
+    async findById({
+      collection,
+      depth,
+      id,
+      overrideAccess,
+      req,
+      select,
+      user,
+    }) {
+      const doc = await loadVisibleRecord({
+        collectionSlug: collection,
         id,
+        overrideAccess,
+        req,
+        user,
       });
 
       if (!doc) {
         return null;
       }
 
-      return runAfterRead({
+      return materializeDocument({
         collectionSlug: collection,
-        config: args.config,
-        doc,
-        operation: "read",
+        depth,
+        overrideAccess,
+        record: doc,
         req,
+        select,
         user,
       });
     },
-    graphql: graphql,
+    graphql,
     async initialize() {
       await args.db.initialize?.(schema);
     },
@@ -1042,11 +1233,21 @@ export function createOboeRuntime(args: {
       graphql = executor;
       this.graphql = graphql;
     },
-    async update({ collection, data, id, overrideAccess, req, user }) {
+    async update({
+      collection,
+      data,
+      depth,
+      id,
+      overrideAccess,
+      req,
+      select,
+      user,
+    }) {
+      const collectionConfig = getCompiledCollection(schema, collection);
+
       if (
         !(await canAccess({
-          collectionSlug: collection,
-          config: args.config,
+          collection: collectionConfig,
           data,
           id,
           operation: "update",
@@ -1060,14 +1261,12 @@ export function createOboeRuntime(args: {
 
       const existing = await args.db.findById({ collection, id });
       const candidateData = await prepareValidatedData({
-        collectionSlug: collection,
-        config: args.config,
+        collection: collectionConfig,
         data,
         db: args.db,
         operation: "update",
         originalDoc: existing,
         req,
-        schema,
         user,
       });
       const updated = await args.db.update({
@@ -1081,8 +1280,7 @@ export function createOboeRuntime(args: {
       }
 
       const doc = await runAfterChange({
-        collectionSlug: collection,
-        config: args.config,
+        collection: collectionConfig,
         doc: updated,
         operation: "update",
         originalDoc: existing,
@@ -1098,12 +1296,19 @@ export function createOboeRuntime(args: {
         operation: "update",
         payload: doc.data,
       });
-      await events.emit(`${collection}.updated`, {
-        collection,
-        id,
-      });
+      await events.emit(`${collection}.updated`, { collection, id });
 
-      return doc;
+      return materializeDocument({
+        collectionSlug: collection,
+        depth,
+        overrideAccess,
+        record: doc,
+        req,
+        select,
+        user,
+      });
     },
   };
+
+  return runtime;
 }

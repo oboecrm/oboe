@@ -1,4 +1,4 @@
-import { createOboeRuntime } from "@oboe/core";
+import { getOboe } from "@oboe/core";
 import { createPostgresAdapter } from "@oboe/db-postgres";
 import { createGraphQLHandler, createGraphQLService } from "@oboe/graphql";
 import { createHttpHandler } from "@oboe/http";
@@ -13,7 +13,7 @@ declare global {
     | Promise<{
         graphqlHandler: (request: Request) => Promise<Response>;
         httpHandler: (request: Request) => Promise<Response>;
-        runtime: ReturnType<typeof createOboeRuntime>;
+        runtime: Awaited<ReturnType<typeof getOboe>>;
       }>
     | undefined;
 }
@@ -34,7 +34,7 @@ async function buildRuntime() {
   const pool = new Pool({
     connectionString,
   });
-  const runtime = createOboeRuntime({
+  const runtime = await getOboe({
     config,
     db: createPostgresAdapter({
       pool,
@@ -43,7 +43,6 @@ async function buildRuntime() {
       retryLimit: config.jobs?.retryLimit,
     }),
   });
-  await runtime.initialize();
   const graphQLService = createGraphQLService(runtime);
 
   return {

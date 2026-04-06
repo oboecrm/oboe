@@ -86,9 +86,9 @@ describe("createOboeRuntime", () => {
     });
 
     expect(runtime.auth.collection()).toBe("users");
-    expect(created.data.stage).toBe("new");
-    expect(created.data.afterChangeSeen).toBe(true);
-    expect(loaded?.data.afterReadSeen).toBe(true);
+    expect(created.stage).toBe("new");
+    expect(created.afterChangeSeen).toBe(true);
+    expect(loaded?.afterReadSeen).toBe(true);
     expect(seenEvents).toEqual(["created"]);
     expect(adapter.jobs).toHaveLength(1);
     expect(adapter.audits).toHaveLength(1);
@@ -164,7 +164,10 @@ describe("createOboeRuntime", () => {
       ],
     });
 
-    expect(created.data.company).toBe(company.id);
+    expect(created.company).toMatchObject({
+      id: company.id,
+      name: "Oboe Inc",
+    });
   });
 
   it("runs beforeChange hooks before built-in validation", async () => {
@@ -209,7 +212,7 @@ describe("createOboeRuntime", () => {
       },
     });
 
-    expect(created.data.value).toBe(42);
+    expect(created.value).toBe(42);
   });
 
   it("rejects invalid built-in field values and validates merged update state", async () => {
@@ -423,11 +426,11 @@ describe("createOboeRuntime", () => {
       id: created.id,
     });
 
-    expect(created.data).toMatchObject({
+    expect(created).toMatchObject({
       name: "OBOE DEV",
       stage: "lead",
     });
-    expect(updated?.data).toMatchObject({
+    expect(updated).toMatchObject({
       name: "OBOE DEV",
       stage: "lead",
     });
@@ -505,5 +508,139 @@ describe("createOboeRuntime", () => {
         },
       ],
     });
+  });
+
+  it("supports where, sort, pagination, select, depth, and count through one query contract", async () => {
+    const runtime = createOboeRuntime({
+      config: defineConfig({
+        modules: [
+          defineModule({
+            collections: [
+              {
+                fields: [{ name: "name", required: true, type: "text" }],
+                slug: "companies",
+              },
+              {
+                fields: [
+                  { name: "name", required: true, type: "text" },
+                  {
+                    maxDepth: 1,
+                    name: "company",
+                    relationTo: "companies",
+                    type: "relation",
+                  },
+                  { name: "score", type: "number" },
+                  { name: "status", type: "text" },
+                ],
+                slug: "contacts",
+              },
+            ],
+            slug: "crm",
+          }),
+        ],
+      }),
+      db: createMemoryAdapter(),
+    });
+
+    const company = await runtime.create({
+      collection: "companies",
+      data: { name: "Acme" },
+    });
+    await runtime.create({
+      collection: "contacts",
+      data: { company: company.id, name: "Beta", score: 2, status: "lead" },
+    });
+    await runtime.create({
+      collection: "contacts",
+      data: { company: company.id, name: "Alpha", score: 10, status: "won" },
+    });
+
+    const result = await runtime.find({
+      collection: "contacts",
+      query: {
+        depth: 1,
+        limit: 1,
+        page: 1,
+        select: {
+          company: {
+            name: true,
+          },
+          name: true,
+          score: true,
+        },
+        sort: ["-score", "name"],
+        where: {
+          and: [{ score: { gte: 2 } }],
+          or: [{ status: { eq: "won" } }, { name: { startsWith: "B" } }],
+        },
+      },
+    });
+
+    expect(result.totalDocs).toBe(2);
+    expect(result.totalPages).toBe(2);
+    expect(result.docs[0]).toMatchObject({
+      company: {
+        name: "Acme",
+      },
+      name: "Alpha",
+      score: 10,
+    });
+
+    const count = await runtime.count({
+      collection: "contacts",
+      query: {
+        where: {
+          score: { gte: 2 },
+        },
+      },
+    });
+
+    expect(count.totalDocs).toBe(2);
+  });
+
+  it("enforces access control across find, findById, and count", async () => {
+    const runtime = createOboeRuntime({
+      config: defineConfig({
+        modules: [
+          defineModule({
+            collections: [
+              {
+                access: {
+                  read: ({ user }) => Boolean(user),
+                },
+                fields: [{ name: "name", type: "text" }],
+                slug: "contacts",
+              },
+            ],
+            slug: "crm",
+          }),
+        ],
+      }),
+      db: createMemoryAdapter(),
+    });
+
+    await runtime.create({
+      collection: "contacts",
+      data: { name: "Protected" },
+      overrideAccess: true,
+    });
+
+    await expect(
+      runtime.find({
+        collection: "contacts",
+      })
+    ).rejects.toThrow('Access denied for read on "contacts".');
+    await expect(
+      runtime.count({
+        collection: "contacts",
+      })
+    ).rejects.toThrow('Access denied for read on "contacts".');
+
+    const result = await runtime.find({
+      collection: "contacts",
+      user: { id: "user-1" },
+    });
+
+    expect(result.docs).toHaveLength(1);
   });
 });

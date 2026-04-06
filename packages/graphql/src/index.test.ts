@@ -1,5 +1,6 @@
 import { createOboeRuntime, defineConfig, defineModule } from "@oboe/core";
 import { createMemoryAdapter } from "@oboe/core/testing";
+import { GraphQLString } from "graphql";
 import { describe, expect, it } from "vitest";
 
 import { createGraphQLService } from "./index.js";
@@ -31,9 +32,10 @@ describe("createGraphQLService", () => {
 
     await service.execute({
       query: `
-        mutation CreateContact($data: JSON!) {
+        mutation CreateContact($data: ContactsCreateInput!) {
           createContacts(data: $data) {
             id
+            name
           }
         }
       `,
@@ -48,16 +50,81 @@ describe("createGraphQLService", () => {
       query: `
         query ListContacts {
           contactsList {
-            data
+            totalDocs
+            docs {
+              id
+              name
+            }
           }
         }
       `,
     })) as {
       data?: {
-        contactsList?: Array<{ data: { name: string } }>;
+        contactsList?: {
+          docs: Array<{ id: string; name: string }>;
+          totalDocs: number;
+        };
       };
     };
 
-    expect(result.data?.contactsList?.[0]?.data.name).toBe("Oboe Dev");
+    expect(result.data?.contactsList?.docs[0]?.name).toBe("Oboe Dev");
+    expect(result.data?.contactsList?.totalDocs).toBe(1);
+  });
+
+  it("supports collection-specific where inputs and custom GraphQL extensions", async () => {
+    const runtime = createOboeRuntime({
+      config: defineConfig({
+        graphQL: {
+          queries: () => ({
+            healthcheck: {
+              resolve: () => "ok",
+              type: GraphQLString,
+            },
+          }),
+        },
+        modules: [
+          defineModule({
+            collections: [
+              {
+                fields: [
+                  { name: "name", type: "text" },
+                  { name: "score", type: "number" },
+                ],
+                slug: "contacts",
+              },
+            ],
+            slug: "crm",
+          }),
+        ],
+      }),
+      db: createMemoryAdapter(),
+    });
+    const service = createGraphQLService(runtime);
+
+    await runtime.create({
+      collection: "contacts",
+      data: { name: "Alpha", score: 10 },
+    });
+
+    const result = (await service.execute({
+      query: `
+        query FilteredContacts {
+          contactsList(where: { score: { gte: 5 } }) {
+            docs {
+              name
+            }
+          }
+          healthcheck
+        }
+      `,
+    })) as {
+      data?: {
+        contactsList?: { docs: Array<{ name: string }> };
+        healthcheck?: string;
+      };
+    };
+
+    expect(result.data?.contactsList?.docs).toEqual([{ name: "Alpha" }]);
+    expect(result.data?.healthcheck).toBe("ok");
   });
 });

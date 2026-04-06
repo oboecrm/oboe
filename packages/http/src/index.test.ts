@@ -47,11 +47,14 @@ describe("createHttpHandler", () => {
       new Request("http://localhost/api/contacts")
     );
     const listPayload = (await listResponse.json()) as {
-      docs: Array<{ id: string }>;
+      docs: Array<{ id: string; name: string }>;
+      totalDocs: number;
     };
 
     expect(createResponse.status).toBe(201);
     expect(listPayload.docs[0]?.id).toBe(created.id);
+    expect(listPayload.docs[0]?.name).toBe("Oboe Dev");
+    expect(listPayload.totalDocs).toBe(1);
   });
 
   it("returns 400 with issues when validation fails", async () => {
@@ -113,5 +116,50 @@ describe("createHttpHandler", () => {
         }),
       ])
     );
+  });
+
+  it("serves count and OpenAPI routes", async () => {
+    const runtime = createOboeRuntime({
+      config: defineConfig({
+        modules: [
+          defineModule({
+            collections: [
+              {
+                fields: [{ name: "name", type: "text" }],
+                slug: "contacts",
+              },
+            ],
+            slug: "crm",
+          }),
+        ],
+      }),
+      db: createMemoryAdapter(),
+    });
+    const handler = createHttpHandler({ runtime });
+
+    await handler(
+      new Request("http://localhost/api/contacts", {
+        body: JSON.stringify({ name: "Oboe Dev" }),
+        headers: { "content-type": "application/json" },
+        method: "POST",
+      })
+    );
+
+    const countResponse = await handler(
+      new Request("http://localhost/api/contacts/count")
+    );
+    const countPayload = (await countResponse.json()) as { totalDocs: number };
+
+    const openApiResponse = await handler(
+      new Request("http://localhost/api/openapi.json")
+    );
+    const openApiPayload = (await openApiResponse.json()) as {
+      openapi: string;
+      paths: Record<string, unknown>;
+    };
+
+    expect(countPayload.totalDocs).toBe(1);
+    expect(openApiPayload.openapi).toBe("3.1.0");
+    expect(openApiPayload.paths["/api/contacts"]).toBeDefined();
   });
 });
