@@ -10,6 +10,15 @@
     "noEmit": true,
     "paths": {
       "@oboe/admin-next": ["../../packages/admin-next/src/index.tsx"],
+      "@oboe/storage-azure-blob": [
+        "../../packages/storage-azure-blob/dist/index.js"
+      ],
+      "@oboe/storage-gcs": ["../../packages/storage-gcs/dist/index.js"],
+      "@oboe/storage-r2": ["../../packages/storage-r2/dist/index.js"],
+      "@oboe/storage-s3": ["../../packages/storage-s3/dist/index.js"],
+      "@oboe/storage-vercel-blob": [
+        "../../packages/storage-vercel-blob/dist/index.js"
+      ],
       "@oboe/core": ["../../packages/core/dist/index.js"],
       "@oboe/core/testing": ["../../packages/core/dist/testing/index.js"],
       "@oboe/db-postgres": ["../../packages/db-postgres/dist/index.js"],

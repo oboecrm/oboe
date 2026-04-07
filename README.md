@@ -32,6 +32,7 @@ OboeCRM is early, but the architecture is already shaped around the v1 concept:
 - `@oboe/storage-relational` provides the shared relational storage and migration layer
 - `@oboe/db-postgres`, `@oboe/db-mysql`, and `@oboe/db-sqlite` are the official relational adapters
 - `@oboe/plugin-storage` applies upload and file storage behavior to upload-enabled collections
+- `@oboe/storage-azure-blob` is the official Azure Blob Storage provider for uploads
 - `@oboe/storage-gcs` is the official Google Cloud Storage provider for uploads
 - `@oboe/storage-r2` is the official Cloudflare R2 provider for uploads
 - `@oboe/storage-s3` is the first official object storage provider for uploads
@@ -132,6 +133,7 @@ Oboe now supports upload-enabled collections with pluggable file storage.
 - store file metadata in a reserved `file` field inside the document record
 - use `@oboe/plugin-storage` for low-level custom adapters
 - use `@oboe/storage-s3` for generic S3-compatible providers
+- use `@oboe/storage-azure-blob` for Azure Blob Storage
 - use `@oboe/storage-gcs` for Google Cloud Storage
 - use `@oboe/storage-r2` for Cloudflare R2 with Oboe-specific defaults
 - use `@oboe/storage-vercel-blob` for Vercel-hosted Blob stores
@@ -212,6 +214,7 @@ This repository is a `pnpm + Turborepo` monorepo.
 - [`packages/core`](./packages/core): config DSL, schema compiler, Local API, hooks, access, events
 - [`packages/storage-relational`](./packages/storage-relational): shared relational manifests, migrations, and storage behavior
 - [`packages/plugin-storage`](./packages/plugin-storage): low-level upload storage plugin and adapter contract
+- [`packages/storage-azure-blob`](./packages/storage-azure-blob): Azure Blob Storage provider
 - [`packages/storage-gcs`](./packages/storage-gcs): Google Cloud Storage provider
 - [`packages/storage-r2`](./packages/storage-r2): Cloudflare R2 provider wrapper
 - [`packages/storage-s3`](./packages/storage-s3): S3-compatible storage provider wrapper
@@ -236,7 +239,7 @@ The current implementation already includes:
 - REST and GraphQL mounted on top of the same runtime
 - a shared relational storage layer with migration metadata
 - upload-enabled collections with pluggable object storage
-- low-level storage plugin and official S3 / R2 / GCS / Vercel Blob providers
+- low-level storage plugin and official S3 / R2 / GCS / Azure Blob / Vercel Blob providers
 - official Postgres, MySQL, and SQLite adapters
 - an Oboe CLI for migration generation, apply, status, and `db:push`
 - generated admin collection screens

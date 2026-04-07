@@ -7,6 +7,7 @@ export default defineWorkspace([
   "packages/jobs/vitest.config.ts",
   "packages/storage-relational/vitest.config.ts",
   "packages/plugin-storage/vitest.config.ts",
+  "packages/storage-azure-blob/vitest.config.ts",
   "packages/storage-gcs/vitest.config.ts",
   "packages/storage-r2/vitest.config.ts",
   "packages/storage-s3/vitest.config.ts",

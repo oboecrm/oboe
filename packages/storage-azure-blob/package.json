@@ -1,5 +1,5 @@
 {
-  "name": "@oboe/admin-next",
+  "name": "@oboe/storage-azure-blob",
   "version": "0.1.0",
   "type": "module",
   "main": "./dist/index.js",
@@ -11,13 +11,15 @@
     }
   },
   "dependencies": {
+    "@azure/storage-blob": "^12.28.0",
     "@oboe/core": "workspace:*",
-    "react": "^19.2.4"
+    "@oboe/plugin-storage": "workspace:*"
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "dev": "tsc -p tsconfig.build.json --watch --preserveWatchOutput",
     "lint": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   }
 }

@@ -1,4 +1,105 @@
-import { defineConfig, defineModule } from "@oboe/core";
+import {
+  defineConfig,
+  defineModule,
+  type PluginConfig,
+  type StorageServeMode,
+} from "@oboe/core";
+import { azureBlobStorage } from "@oboe/storage-azure-blob";
+import { gcsStorage } from "@oboe/storage-gcs";
+import { r2Storage } from "@oboe/storage-r2";
+import { s3Storage } from "@oboe/storage-s3";
+import { vercelBlobStorage } from "@oboe/storage-vercel-blob";
+
+type StudioStorageProvider =
+  | "azure-blob"
+  | "gcs"
+  | "local"
+  | "r2"
+  | "s3"
+  | "vercel-blob";
+
+function requireEnv(name: string) {
+  const value = process.env[name];
+
+  if (!value) {
+    throw new Error(
+      `apps/studio storage sample requires ${name} when OBOE_STORAGE_PROVIDER=${storageProvider}.`
+    );
+  }
+
+  return value;
+}
+
+const storageProvider = (process.env.OBOE_STORAGE_PROVIDER ??
+  "local") as StudioStorageProvider;
+const storagePrefix = process.env.OBOE_STORAGE_PREFIX ?? "media";
+const storageServeMode = (process.env.OBOE_STORAGE_SERVE_MODE ??
+  "proxy") as StorageServeMode;
+
+function createStoragePlugin(): PluginConfig | undefined {
+  const collections = {
+    media: {
+      prefix: storagePrefix,
+      serveMode: storageServeMode,
+    },
+  } as const;
+
+  switch (storageProvider) {
+    case "local":
+      return undefined;
+    case "s3":
+      return s3Storage({
+        bucket: requireEnv("S3_BUCKET"),
+        collections,
+        config: {
+          credentials: {
+            accessKeyId: requireEnv("S3_ACCESS_KEY_ID"),
+            secretAccessKey: requireEnv("S3_SECRET_ACCESS_KEY"),
+          },
+          region: requireEnv("S3_REGION"),
+        },
+      });
+    case "r2":
+      return r2Storage({
+        accountId: requireEnv("CLOUDFLARE_ACCOUNT_ID"),
+        bucket: requireEnv("R2_BUCKET"),
+        collections,
+        config: {
+          credentials: {
+            accessKeyId: requireEnv("R2_ACCESS_KEY_ID"),
+            secretAccessKey: requireEnv("R2_SECRET_ACCESS_KEY"),
+          },
+        },
+      });
+    case "gcs":
+      return gcsStorage({
+        bucket: requireEnv("GCS_BUCKET"),
+        collections,
+        config: {
+          projectId: process.env.GCP_PROJECT_ID,
+        },
+      });
+    case "vercel-blob":
+      return vercelBlobStorage({
+        access: process.env.BLOB_ACCESS === "public" ? "public" : "private",
+        collections,
+        token: process.env.BLOB_READ_WRITE_TOKEN,
+      });
+    case "azure-blob":
+      return azureBlobStorage({
+        accountKey: process.env.AZURE_STORAGE_ACCOUNT_KEY,
+        accountName: process.env.AZURE_STORAGE_ACCOUNT_NAME,
+        collections,
+        connectionString: process.env.AZURE_STORAGE_CONNECTION_STRING,
+        container: requireEnv("AZURE_STORAGE_CONTAINER"),
+        sasToken: process.env.AZURE_STORAGE_SAS_TOKEN,
+      });
+    default:
+      throw new Error(`Unsupported OBOE_STORAGE_PROVIDER: ${storageProvider}`);
+  }
+}
+
+const storagePlugin = createStoragePlugin();
 
 export default defineConfig({
   admin: {
@@ -170,6 +271,31 @@ export default defineConfig({
     defineModule({
       collections: [
         {
+          admin: {
+            defaultColumns: ["title"],
+            titleField: "title",
+          },
+          fields: [
+            {
+              name: "title",
+              type: "text",
+            },
+            {
+              name: "alt",
+              type: "text",
+            },
+          ],
+          labels: {
+            plural: "Media",
+            singular: "Media",
+          },
+          slug: "media",
+          upload: {
+            maxFileSize: 10 * 1024 * 1024,
+            mimeTypes: ["application/pdf", "image/jpeg", "image/png"],
+          },
+        },
+        {
           auth: true,
           fields: [
             {
@@ -193,4 +319,5 @@ export default defineConfig({
       slug: "system",
     }),
   ],
+  plugins: storagePlugin ? [storagePlugin] : [],
 });
