@@ -8,7 +8,7 @@ export function defineModule<TModule extends ModuleConfig>(
 
 export function defineConfig<TConfig extends OboeConfig>(
   config: TConfig
-): TConfig {
+): OboeConfig {
   const plugins = config.plugins ?? [];
 
   return plugins.reduce<OboeConfig>((currentConfig, plugin) => {
@@ -17,5 +17,5 @@ export function defineConfig<TConfig extends OboeConfig>(
     }
 
     return plugin.extendConfig(currentConfig);
-  }, config) as TConfig;
+  }, config);
 }

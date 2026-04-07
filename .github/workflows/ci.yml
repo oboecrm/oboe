@@ -7,6 +7,7 @@ on:
       - main
     paths:
       - ".github/workflows/ci.yml"
+      - ".nvmrc"
       - "apps/**"
       - "packages/**"
       - "templates/**"
@@ -18,6 +19,7 @@ on:
   pull_request:
     paths:
       - ".github/workflows/ci.yml"
+      - ".nvmrc"
       - "apps/**"
       - "packages/**"
       - "templates/**"
@@ -43,15 +45,15 @@ jobs:
       TURBO_TOKEN: ${{ secrets.TURBO_TOKEN }}
       TURBO_TEAM: ${{ vars.TURBO_TEAM }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 2
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v5
         with:
           run_install: false
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
-          node-version: 22
+          node-version-file: .nvmrc
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile

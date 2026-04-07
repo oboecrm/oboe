@@ -120,6 +120,25 @@ export class OboeValidationError extends Error {
   }
 }
 
+export class OboeEmailError extends Error {
+  readonly cause?: unknown;
+  readonly provider?: string;
+  readonly statusCode?: number;
+
+  constructor(args: {
+    cause?: unknown;
+    message: string;
+    provider?: string;
+    statusCode?: number;
+  }) {
+    super(args.message);
+    this.name = "OboeEmailError";
+    this.cause = args.cause;
+    this.provider = args.provider;
+    this.statusCode = args.statusCode;
+  }
+}
+
 export interface SelectFieldOption {
   label: string;
   value: string;
@@ -155,6 +174,48 @@ export interface StoredFileData {
   storageKey: string;
   url?: string;
 }
+
+export interface SendEmailAddressObject {
+  address: string;
+  name?: string;
+}
+
+export type SendEmailAddress = string | SendEmailAddressObject;
+
+export type SendEmailAddressValue = SendEmailAddress | SendEmailAddress[];
+
+export interface SendEmailAttachment {
+  content: Buffer | Uint8Array | string;
+  contentType?: string;
+  filename: string;
+}
+
+export interface SendEmailOptions {
+  attachments?: SendEmailAttachment[];
+  bcc?: SendEmailAddressValue;
+  cc?: SendEmailAddressValue;
+  from?: SendEmailAddress;
+  headers?: Record<string, string>;
+  html?: string;
+  replyTo?: SendEmailAddressValue;
+  subject?: string;
+  text?: string;
+  to?: SendEmailAddressValue;
+}
+
+export interface InitializedEmailAdapter<TSendEmailResponse = unknown> {
+  clients?: Record<string, unknown>;
+  defaultFromAddress: string;
+  defaultFromName: string;
+  name: string;
+  sendEmail: (
+    message: SendEmailOptions
+  ) => Promise<TSendEmailResponse> | TSendEmailResponse;
+}
+
+export type EmailAdapter<TSendEmailResponse = unknown> = (args: {
+  oboe: OboeRuntime;
+}) => InitializedEmailAdapter<TSendEmailResponse>;
 
 export type StorageServeMode = "direct" | "proxy";
 
@@ -364,6 +425,7 @@ export interface ServerFunctionConfig<
 export interface OboeConfig {
   admin?: AdminConfig;
   auth?: AuthConfig;
+  email?: EmailAdapter | Promise<EmailAdapter>;
   graphQL?: GraphQLConfig;
   jobs?: JobsConfig;
   modules: ModuleConfig[];
@@ -570,6 +632,9 @@ export interface OboeRuntime {
     req?: Request;
     user?: unknown;
   }) => Promise<Response | null>;
+  email: {
+    getClient: <T = unknown>(name: string) => T | undefined;
+  };
   events: EventBus;
   find: (args: {
     collection: string;
@@ -591,6 +656,7 @@ export interface OboeRuntime {
   initialize: () => Promise<void>;
   jobs: JobDispatcher;
   schema: CompiledSchema;
+  sendEmail: (message: SendEmailOptions) => Promise<unknown>;
   setGraphQLExecutor: (executor: GraphQLExecutor) => void;
   update: (args: {
     collection: string;

@@ -17,6 +17,7 @@ import type {
   FieldConfig,
   FieldValidationContext,
   GraphQLExecutor,
+  InitializedEmailAdapter,
   JobDispatcher,
   JobRequest,
   OboeConfig,
@@ -27,6 +28,7 @@ import type {
   SchemaParseFailure,
   SchemaParseResult,
   SelectShape,
+  SendEmailOptions,
   StandardSchemaIssue,
   StandardSchemaLike,
   StoredFileData,
@@ -35,7 +37,7 @@ import type {
   ValidationIssue,
   ValidationIssueResult,
 } from "./types.js";
-import { OboeValidationError } from "./types.js";
+import { OboeEmailError, OboeValidationError } from "./types.js";
 import {
   getCollectionFileProxyPath,
   getCollectionServeMode,
@@ -1060,6 +1062,24 @@ function toPublicDocument(record: OboeRecord): OboeDocument {
   };
 }
 
+function normalizeEmailMessage(args: {
+  defaultFromAddress: string;
+  defaultFromName: string;
+  message: SendEmailOptions;
+}): SendEmailOptions {
+  if (args.message.from) {
+    return args.message;
+  }
+
+  return {
+    ...args.message,
+    from: {
+      address: args.defaultFromAddress,
+      name: args.defaultFromName,
+    },
+  };
+}
+
 export function createOboeRuntime(args: {
   config: OboeConfig;
   db: DatabaseAdapter;
@@ -1075,6 +1095,9 @@ export function createOboeRuntime(args: {
   };
   const jobs = createJobDispatcher(args.db, fallbackJobs);
   let graphql = noopGraphQLExecutor;
+  let emailAdapter: InitializedEmailAdapter | null | undefined;
+  let emailAdapterPromise: Promise<InitializedEmailAdapter | null> | null =
+    null;
 
   const loadVisibleRecord = async (loadArgs: {
     collectionSlug: string;
@@ -1201,6 +1224,30 @@ export function createOboeRuntime(args: {
   const countRecords = (records: OboeRecord[]): CountResult => ({
     totalDocs: records.length,
   });
+
+  const getInitializedEmailAdapter = async () => {
+    if (emailAdapter !== undefined) {
+      return emailAdapter;
+    }
+
+    if (emailAdapterPromise) {
+      return emailAdapterPromise;
+    }
+
+    emailAdapterPromise = (async () => {
+      const adapterFactory = args.config.email ? await args.config.email : null;
+
+      emailAdapter = adapterFactory ? adapterFactory({ oboe: runtime }) : null;
+
+      return emailAdapter;
+    })();
+
+    try {
+      return await emailAdapterPromise;
+    } finally {
+      emailAdapterPromise = null;
+    }
+  };
 
   const runtime: OboeRuntime = {
     auth: {
@@ -1411,6 +1458,11 @@ export function createOboeRuntime(args: {
           })
         : null;
     },
+    email: {
+      getClient<T = unknown>(name: string): T | undefined {
+        return emailAdapter?.clients?.[name] as T | undefined;
+      },
+    },
     events,
     async find({ collection, overrideAccess, query, req, user }) {
       const collectionConfig = getCompiledCollection(schema, collection);
@@ -1492,6 +1544,7 @@ export function createOboeRuntime(args: {
     graphql,
     async initialize() {
       await args.db.initialize?.(schema);
+      await getInitializedEmailAdapter();
 
       for (const collection of schema.collections.values()) {
         if (!collection.upload) {
@@ -1503,6 +1556,23 @@ export function createOboeRuntime(args: {
     },
     jobs,
     schema,
+    async sendEmail(message) {
+      const adapter = await getInitializedEmailAdapter();
+
+      if (!adapter) {
+        throw new OboeEmailError({
+          message: "Email adapter is not configured.",
+        });
+      }
+
+      return await adapter.sendEmail(
+        normalizeEmailMessage({
+          defaultFromAddress: adapter.defaultFromAddress,
+          defaultFromName: adapter.defaultFromName,
+          message,
+        })
+      );
+    },
     setGraphQLExecutor(executor) {
       graphql = executor;
       this.graphql = graphql;

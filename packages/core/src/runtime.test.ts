@@ -9,9 +9,81 @@ import type {
   JobRequest,
   OboeRecord,
 } from "./types.js";
-import { OboeValidationError } from "./types.js";
+import { OboeEmailError, OboeValidationError } from "./types.js";
 
 describe("createOboeRuntime", () => {
+  it("rejects sendEmail when no email adapter is configured", async () => {
+    const runtime = createOboeRuntime({
+      config: defineConfig({
+        modules: [
+          defineModule({
+            collections: [],
+            slug: "crm",
+          }),
+        ],
+      }),
+      db: createMemoryAdapter(),
+    });
+
+    await expect(
+      runtime.sendEmail({
+        subject: "Hello",
+        to: "dev@example.com",
+      })
+    ).rejects.toBeInstanceOf(OboeEmailError);
+  });
+
+  it("resolves promised email adapters and applies the default sender", async () => {
+    const sentMessages: Array<Record<string, unknown>> = [];
+    const resendClient = {
+      request: async () => ({ ok: true }),
+    };
+    const runtime = createOboeRuntime({
+      config: defineConfig({
+        email: Promise.resolve(() => ({
+          clients: {
+            resend: resendClient,
+          },
+          defaultFromAddress: "info@oboe.dev",
+          defaultFromName: "Oboe",
+          name: "test-email",
+          async sendEmail(message) {
+            sentMessages.push(message as Record<string, unknown>);
+            return {
+              accepted: true,
+            };
+          },
+        })),
+        modules: [
+          defineModule({
+            collections: [],
+            slug: "crm",
+          }),
+        ],
+      }),
+      db: createMemoryAdapter(),
+    });
+
+    await runtime.initialize();
+
+    await runtime.sendEmail({
+      subject: "Hello",
+      to: "dev@example.com",
+    });
+
+    expect(runtime.email.getClient("resend")).toBe(resendClient);
+    expect(sentMessages).toEqual([
+      {
+        from: {
+          address: "info@oboe.dev",
+          name: "Oboe",
+        },
+        subject: "Hello",
+        to: "dev@example.com",
+      },
+    ]);
+  });
+
   it("shares Local API behavior across hooks, events, and jobs", async () => {
     const adapter = createMemoryAdapter();
     const runtime = createOboeRuntime({

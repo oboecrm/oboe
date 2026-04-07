@@ -48,7 +48,7 @@ Next.js-native at the core.
 
 Before running the studio locally, make sure you have:
 
-- Node.js 22+
+- Node.js 24+
 - pnpm 10+
 - a reachable PostgreSQL, MySQL 8+, or SQLite database
 
