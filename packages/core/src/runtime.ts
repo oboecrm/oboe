@@ -6,9 +6,14 @@ import {
   paginateDocuments,
   sortRecords,
 } from "./query.js";
-import { compileSchema, getCompiledCollection } from "./schema.js";
+import {
+  compileSchema,
+  getCompiledCollection,
+  getCompiledGlobal,
+} from "./schema.js";
 import type {
   CollectionConfig,
+  CollectionHookArgsBase,
   CollectionQuery,
   CollectionValidationContext,
   CountResult,
@@ -16,12 +21,20 @@ import type {
   EventBus,
   FieldConfig,
   FieldValidationContext,
+  GlobalConfig,
+  GlobalOperation,
+  GlobalSchema,
+  GlobalValidationContext,
+  GlobalValidator,
   GraphQLExecutor,
+  HookContext,
   InitializedEmailAdapter,
   JobDispatcher,
   JobRequest,
   OboeConfig,
   OboeDocument,
+  OboeGlobalDocument,
+  OboeGlobalRecord,
   OboeRecord,
   OboeRuntime,
   SchemaAdapter,
@@ -51,6 +64,22 @@ const noopGraphQLExecutor: GraphQLExecutor = {
 };
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const hookContextStore = new WeakMap<Request, HookContext>();
+
+function getOrCreateHookContext(req?: Request) {
+  if (!req) {
+    return {};
+  }
+
+  const existing = hookContextStore.get(req);
+  if (existing) {
+    return existing;
+  }
+
+  const created: HookContext = {};
+  hookContextStore.set(req, created);
+  return created;
+}
 
 function isRelationshipField(field: FieldConfig) {
   return field.type === "relation" || field.type === "relationship";
@@ -104,6 +133,67 @@ function isJsonValue(value: unknown): boolean {
 
 function isMissingValue(value: unknown) {
   return value === undefined || value === null || value === "";
+}
+
+function getNestedFields(field: FieldConfig): FieldConfig[] {
+  const candidate = (field as FieldConfig & { fields?: FieldConfig[] }).fields;
+  return Array.isArray(candidate) ? candidate : [];
+}
+
+function getValueAtPath(source: Record<string, unknown>, path: string[]) {
+  let current: unknown = source;
+
+  for (const segment of path) {
+    if (Array.isArray(current)) {
+      current = current[Number(segment)];
+      continue;
+    }
+
+    if (!isPlainObject(current)) {
+      return undefined;
+    }
+
+    current = current[segment];
+  }
+
+  return current;
+}
+
+function setValueAtPath(
+  source: Record<string, unknown>,
+  path: string[],
+  value: unknown
+) {
+  let current: Record<string, unknown> | unknown[] = source;
+
+  for (const segment of path.slice(0, -1)) {
+    if (Array.isArray(current)) {
+      const index = Number(segment);
+      const next = current[index];
+      if (!isPlainObject(next) && !Array.isArray(next)) {
+        current[index] = {};
+      }
+      current = current[index] as Record<string, unknown> | unknown[];
+      continue;
+    }
+
+    const next = current[segment];
+    if (!isPlainObject(next) && !Array.isArray(next)) {
+      current[segment] = {};
+    }
+
+    current = current[segment] as Record<string, unknown> | unknown[];
+  }
+
+  const leaf = path.at(-1);
+  if (leaf) {
+    if (Array.isArray(current)) {
+      current[Number(leaf)] = value;
+      return;
+    }
+
+    current[leaf] = value;
+  }
 }
 
 function normalizePath(path?: PropertyKey[]) {
@@ -283,20 +373,125 @@ async function parseWithSchema<TContext>(args: {
   } as const;
 }
 
-function builtInFieldIssues(args: {
-  collection: CollectionConfig;
-  data: Record<string, unknown>;
-  db: DatabaseAdapter;
-  field: FieldConfig;
+function scopeSlug(args: {
+  collection?: CollectionConfig;
+  global?: GlobalConfig;
 }) {
-  const path = [args.field.name];
-  const value = args.data[args.field.name];
+  return args.collection?.slug ?? args.global?.slug ?? "unknown";
+}
+
+async function walkFieldNodes(args: {
+  data: Record<string, unknown>;
+  fields: FieldConfig[];
+  path?: string[];
+  visit: (args: {
+    field: FieldConfig;
+    path: string[];
+    siblingData: Record<string, unknown>;
+  }) => Promise<void>;
+}) {
+  for (const field of args.fields) {
+    const path = [...(args.path ?? []), field.name];
+    await args.visit({
+      field,
+      path,
+      siblingData: args.data,
+    });
+
+    const nestedFields = getNestedFields(field);
+    if (nestedFields.length === 0) {
+      continue;
+    }
+
+    const value = getValueAtPath(args.data, path);
+    if (Array.isArray(value)) {
+      for (let index = 0; index < value.length; index += 1) {
+        const item = value[index];
+        if (!isPlainObject(item)) {
+          continue;
+        }
+
+        await walkFieldNodes({
+          data: item,
+          fields: nestedFields,
+          path: [...path, String(index)],
+          visit: args.visit,
+        });
+      }
+      continue;
+    }
+
+    if (!isPlainObject(value)) {
+      continue;
+    }
+
+    await walkFieldNodes({
+      data: value,
+      fields: nestedFields,
+      path,
+      visit: args.visit,
+    });
+  }
+}
+
+async function runFieldHookPhase(args: {
+  collection?: CollectionConfig;
+  context: HookContext;
+  data: Record<string, unknown>;
+  fields: FieldConfig[];
+  global?: GlobalConfig;
+  hookName: "afterChange" | "afterRead" | "beforeChange" | "beforeValidate";
+  oboe: OboeRuntime;
+  operation: "create" | "read" | "update";
+  originalDoc?: OboeGlobalRecord | OboeRecord | null;
+  req?: Request;
+  user?: unknown;
+}) {
+  await walkFieldNodes({
+    data: args.data,
+    fields: args.fields,
+    visit: async ({ field, path, siblingData }) => {
+      let value = getValueAtPath(args.data, path);
+
+      for (const hook of field.hooks?.[args.hookName] ?? []) {
+        value = await hook({
+          collection: args.collection,
+          context: args.context,
+          data: args.data,
+          field,
+          global: args.global,
+          oboe: args.oboe,
+          operation: args.operation,
+          originalDoc: args.originalDoc,
+          path,
+          req: args.req,
+          siblingData,
+          user: args.user,
+          value,
+        });
+        setValueAtPath(args.data, path, value);
+      }
+    },
+  });
+
+  return args.data;
+}
+
+function builtInFieldIssues(args: {
+  collection?: CollectionConfig;
+  data: Record<string, unknown>;
+  field: FieldConfig;
+  global?: GlobalConfig;
+  path: string[];
+}) {
+  const slug = scopeSlug(args);
+  const value = getValueAtPath(args.data, args.path);
 
   if (args.field.required && isMissingValue(value)) {
     return [
       {
-        message: `Field "${args.collection.slug}.${args.field.name}" is required.`,
-        path,
+        message: `Field "${slug}.${args.path.join(".")}" is required.`,
+        path: args.path,
       },
     ];
   }
@@ -310,8 +505,8 @@ function builtInFieldIssues(args: {
       if (typeof value !== "string" || !EMAIL_PATTERN.test(value)) {
         return [
           {
-            message: `Field "${args.collection.slug}.${args.field.name}" must be a valid email address.`,
-            path,
+            message: `Field "${slug}.${args.path.join(".")}" must be a valid email address.`,
+            path: args.path,
           },
         ];
       }
@@ -320,8 +515,8 @@ function builtInFieldIssues(args: {
       if (typeof value !== "number" || !Number.isFinite(value)) {
         return [
           {
-            message: `Field "${args.collection.slug}.${args.field.name}" must be a finite number.`,
-            path,
+            message: `Field "${slug}.${args.path.join(".")}" must be a finite number.`,
+            path: args.path,
           },
         ];
       }
@@ -330,8 +525,8 @@ function builtInFieldIssues(args: {
       if (typeof value !== "boolean") {
         return [
           {
-            message: `Field "${args.collection.slug}.${args.field.name}" must be a boolean.`,
-            path,
+            message: `Field "${slug}.${args.path.join(".")}" must be a boolean.`,
+            path: args.path,
           },
         ];
       }
@@ -340,8 +535,8 @@ function builtInFieldIssues(args: {
       if (typeof value !== "string" || Number.isNaN(Date.parse(value))) {
         return [
           {
-            message: `Field "${args.collection.slug}.${args.field.name}" must be a valid date string.`,
-            path,
+            message: `Field "${slug}.${args.path.join(".")}" must be a valid date string.`,
+            path: args.path,
           },
         ];
       }
@@ -354,8 +549,8 @@ function builtInFieldIssues(args: {
       ) {
         return [
           {
-            message: `Field "${args.collection.slug}.${args.field.name}" must match one of the configured options.`,
-            path,
+            message: `Field "${slug}.${args.path.join(".")}" must match one of the configured options.`,
+            path: args.path,
           },
         ];
       }
@@ -364,8 +559,8 @@ function builtInFieldIssues(args: {
       if (!isJsonValue(value)) {
         return [
           {
-            message: `Field "${args.collection.slug}.${args.field.name}" must be valid JSON data.`,
-            path,
+            message: `Field "${slug}.${args.path.join(".")}" must be valid JSON data.`,
+            path: args.path,
           },
         ];
       }
@@ -375,8 +570,8 @@ function builtInFieldIssues(args: {
       if (typeof value !== "string") {
         return [
           {
-            message: `Relationship field "${args.collection.slug}.${args.field.name}" must be a record id string.`,
-            path,
+            message: `Relationship field "${slug}.${args.path.join(".")}" must be a record id string.`,
+            path: args.path,
           },
         ];
       }
@@ -386,7 +581,7 @@ function builtInFieldIssues(args: {
       return [
         {
           message: "__relationship__",
-          path,
+          path: args.path,
         },
       ];
     default:
@@ -395,9 +590,10 @@ function builtInFieldIssues(args: {
 }
 
 async function validateRelationshipIssue(args: {
-  collection: CollectionConfig;
+  collection?: CollectionConfig;
   db: DatabaseAdapter;
   field: FieldConfig;
+  global?: GlobalConfig;
   issue: ValidationIssue;
   value: unknown;
 }) {
@@ -418,130 +614,156 @@ async function validateRelationshipIssue(args: {
     return null;
   }
 
+  const slug = scopeSlug(args);
   return {
-    message: `Relationship field "${args.collection.slug}.${args.field.name}" refers to missing ${args.field.relationTo} record "${String(args.value)}".`,
+    message: `Relationship field "${slug}.${args.field.name}" refers to missing ${args.field.relationTo} record "${String(args.value)}".`,
     path: args.issue.path,
   };
 }
 
 async function runBuiltInFieldValidation(args: {
   candidateData: Record<string, unknown>;
-  collection: CollectionConfig;
+  collection?: CollectionConfig;
   db: DatabaseAdapter;
+  fields: FieldConfig[];
+  global?: GlobalConfig;
 }) {
   const issues: ValidationIssue[] = [];
 
-  for (const field of args.collection.fields) {
-    const builtInIssues = builtInFieldIssues({
-      collection: args.collection,
-      data: args.candidateData,
-      db: args.db,
-      field,
-    });
+  await walkFieldNodes({
+    data: args.candidateData,
+    fields: args.fields,
+    visit: async ({ field, path }) => {
+      const builtInIssues = builtInFieldIssues({
+        collection: args.collection,
+        data: args.candidateData,
+        field,
+        global: args.global,
+        path,
+      });
 
-    for (const issue of builtInIssues) {
-      if (issue.message === "__relationship__") {
-        const nextIssue = await validateRelationshipIssue({
-          collection: args.collection,
-          db: args.db,
-          field,
-          issue,
-          value: args.candidateData[field.name],
-        });
+      for (const issue of builtInIssues) {
+        if (issue.message === "__relationship__") {
+          const nextIssue = await validateRelationshipIssue({
+            collection: args.collection,
+            db: args.db,
+            field,
+            global: args.global,
+            issue,
+            value: getValueAtPath(args.candidateData, path),
+          });
 
-        if (nextIssue) {
-          issues.push(nextIssue);
+          if (nextIssue) {
+            issues.push(nextIssue);
+          }
+          continue;
         }
-        continue;
-      }
 
-      issues.push(issue);
-    }
-  }
+        issues.push(issue);
+      }
+    },
+  });
 
   return issues;
 }
 
 async function runFieldSchemaValidation(args: {
   candidateData: Record<string, unknown>;
-  collection: CollectionConfig;
+  collection?: CollectionConfig;
+  context: HookContext;
+  fields: FieldConfig[];
+  global?: GlobalConfig;
   operation: "create" | "update";
-  originalDoc?: OboeRecord | null;
+  originalDoc?: OboeGlobalRecord | OboeRecord | null;
   req?: Request;
   user?: unknown;
 }) {
   const issues: ValidationIssue[] = [];
 
-  for (const field of args.collection.fields) {
-    if (!field.schema) {
-      continue;
-    }
+  await walkFieldNodes({
+    data: args.candidateData,
+    fields: args.fields,
+    visit: async ({ field, path }) => {
+      if (!field.schema) {
+        return;
+      }
 
-    const context: FieldValidationContext = {
-      collection: args.collection,
-      data: args.candidateData,
-      field,
-      operation: args.operation,
-      originalDoc: args.originalDoc,
-      req: args.req,
-      user: args.user,
-    };
-    const result = await parseWithSchema({
-      context,
-      fallbackPath: [field.name],
-      schema: field.schema,
-      value: args.candidateData[field.name],
-    });
+      const context: FieldValidationContext = {
+        collection: args.collection,
+        data: args.candidateData,
+        field,
+        global: args.global,
+        operation: args.operation,
+        originalDoc: args.originalDoc,
+        path,
+        req: args.req,
+        user: args.user,
+      };
+      const result = await parseWithSchema({
+        context,
+        fallbackPath: path,
+        schema: field.schema,
+        value: getValueAtPath(args.candidateData, path),
+      });
 
-    if ("issues" in result) {
-      issues.push(...result.issues);
-      continue;
-    }
+      if ("issues" in result) {
+        issues.push(...result.issues);
+        return;
+      }
 
-    args.candidateData[field.name] = result.value;
-  }
+      setValueAtPath(args.candidateData, path, result.value);
+    },
+  });
 
   return issues;
 }
 
 async function runFieldValidatorValidation(args: {
   candidateData: Record<string, unknown>;
-  collection: CollectionConfig;
+  collection?: CollectionConfig;
+  fields: FieldConfig[];
+  global?: GlobalConfig;
   operation: "create" | "update";
-  originalDoc?: OboeRecord | null;
+  originalDoc?: OboeGlobalRecord | OboeRecord | null;
   req?: Request;
   user?: unknown;
 }) {
   const issues: ValidationIssue[] = [];
 
-  for (const field of args.collection.fields) {
-    if (!field.validate) {
-      continue;
-    }
+  await walkFieldNodes({
+    data: args.candidateData,
+    fields: args.fields,
+    visit: async ({ field, path }) => {
+      if (!field.validate) {
+        return;
+      }
 
-    const context: FieldValidationContext = {
-      collection: args.collection,
-      data: args.candidateData,
-      field,
-      operation: args.operation,
-      originalDoc: args.originalDoc,
-      req: args.req,
-      user: args.user,
-    };
-    let result: ValidationIssueResult;
+      const context: FieldValidationContext = {
+        collection: args.collection,
+        data: args.candidateData,
+        field,
+        global: args.global,
+        operation: args.operation,
+        originalDoc: args.originalDoc,
+        path,
+        req: args.req,
+        user: args.user,
+      };
+      let result: ValidationIssueResult;
 
-    try {
-      result = await field.validate({
-        context,
-        value: args.candidateData[field.name],
-      });
-    } catch (error) {
-      issues.push(...normalizeThrownValidationIssues(error, [field.name]));
-      continue;
-    }
+      try {
+        result = await field.validate({
+          context,
+          value: getValueAtPath(args.candidateData, path),
+        });
+      } catch (error) {
+        issues.push(...normalizeThrownValidationIssues(error, path));
+        return;
+      }
 
-    issues.push(...normalizeValidationIssues(result, [field.name]));
-  }
+      issues.push(...normalizeValidationIssues(result, path));
+    },
+  });
 
   return issues;
 }
@@ -638,6 +860,96 @@ async function runCollectionValidatorValidation(args: {
   return normalizeValidationIssues(result);
 }
 
+async function runGlobalSchemaValidation(args: {
+  candidateData: Record<string, unknown>;
+  global: GlobalConfig;
+  originalDoc?: OboeGlobalRecord | null;
+  req?: Request;
+  user?: unknown;
+}): Promise<{
+  candidateData: Record<string, unknown>;
+  issues: ValidationIssue[];
+}> {
+  if (!args.global.schema) {
+    return {
+      candidateData: args.candidateData,
+      issues: [],
+    };
+  }
+
+  const context: GlobalValidationContext = {
+    data: args.candidateData,
+    global: args.global,
+    operation: "update",
+    originalDoc: args.originalDoc,
+    req: args.req,
+    user: args.user,
+  };
+  const result = await parseWithSchema({
+    context,
+    fallbackPath: [],
+    schema: args.global.schema as GlobalSchema,
+    value: args.candidateData,
+  });
+
+  if ("issues" in result) {
+    return {
+      candidateData: args.candidateData,
+      issues: result.issues,
+    };
+  }
+
+  if (!isPlainObject(result.value)) {
+    return {
+      candidateData: args.candidateData,
+      issues: [
+        {
+          message: `Global schema for "${args.global.slug}" must return an object.`,
+          path: [],
+        },
+      ],
+    };
+  }
+
+  return {
+    candidateData: result.value,
+    issues: [],
+  };
+}
+
+async function runGlobalValidatorValidation(args: {
+  candidateData: Record<string, unknown>;
+  global: GlobalConfig;
+  originalDoc?: OboeGlobalRecord | null;
+  req?: Request;
+  user?: unknown;
+}) {
+  if (!args.global.validate) {
+    return [];
+  }
+
+  const context: GlobalValidationContext = {
+    data: args.candidateData,
+    global: args.global,
+    operation: "update",
+    originalDoc: args.originalDoc,
+    req: args.req,
+    user: args.user,
+  };
+  let result: ValidationIssueResult;
+
+  try {
+    result = await (args.global.validate as GlobalValidator)({
+      context,
+      data: args.candidateData,
+    });
+  } catch (error) {
+    return normalizeThrownValidationIssues(error, []);
+  }
+
+  return normalizeValidationIssues(result);
+}
+
 function createJobDispatcher(
   db: DatabaseAdapter,
   fallback: JobDispatcher
@@ -683,27 +995,291 @@ async function canAccess(args: {
   });
 }
 
-async function runAfterRead(args: {
-  collection: CollectionConfig;
-  doc: OboeRecord;
+async function canAccessGlobal(args: {
+  data?: Record<string, unknown>;
+  global: GlobalConfig;
+  operation: GlobalOperation;
+  overrideAccess?: boolean;
   req?: Request;
   user?: unknown;
 }) {
-  let doc = await attachResolvedFileUrl(args);
+  if (args.overrideAccess) {
+    return true;
+  }
 
-  for (const hook of args.collection.hooks?.afterRead ?? []) {
+  const resolver = args.global.access?.[args.operation];
+
+  if (!resolver) {
+    return true;
+  }
+
+  return resolver({
+    action: args.operation,
+    data: args.data,
+    global: args.global,
+    req: args.req,
+    user: args.user,
+  });
+}
+
+function collectionHookBase(args: {
+  collection: CollectionConfig;
+  context: HookContext;
+  oboe: OboeRuntime;
+  operation: CollectionHookArgsBase["operation"];
+  req?: Request;
+  user?: unknown;
+}): CollectionHookArgsBase {
+  return {
+    collection: args.collection,
+    context: args.context,
+    oboe: args.oboe,
+    operation: args.operation,
+    req: args.req,
+    user: args.user,
+  };
+}
+
+async function runCollectionBeforeOperation(args: {
+  collection: CollectionConfig;
+  context: HookContext;
+  hookArgs: Record<string, unknown>;
+  oboe: OboeRuntime;
+  operation: CollectionHookArgsBase["operation"];
+  req?: Request;
+  user?: unknown;
+}) {
+  for (const hook of args.collection.hooks?.beforeOperation ?? []) {
+    await hook({
+      ...collectionHookBase(args),
+      args: args.hookArgs,
+    });
+  }
+}
+
+async function runCollectionBeforeRead(args: {
+  collection: CollectionConfig;
+  context: HookContext;
+  doc: OboeRecord;
+  oboe: OboeRuntime;
+  operation: CollectionHookArgsBase["operation"];
+  req?: Request;
+  user?: unknown;
+}) {
+  let doc = args.doc;
+
+  for (const hook of args.collection.hooks?.beforeRead ?? []) {
     doc = await hook({
-      context: {
-        collection: args.collection,
-        operation: "read",
-        req: args.req,
-        user: args.user,
-      },
+      ...collectionHookBase(args),
       doc,
     });
   }
 
   return doc;
+}
+
+async function runCollectionAfterRead(args: {
+  collection: CollectionConfig;
+  context: HookContext;
+  doc: OboeRecord;
+  oboe: OboeRuntime;
+  operation: CollectionHookArgsBase["operation"];
+  req?: Request;
+  user?: unknown;
+}) {
+  let doc = args.doc;
+
+  for (const hook of args.collection.hooks?.afterRead ?? []) {
+    doc = await hook({
+      ...collectionHookBase(args),
+      doc,
+    });
+  }
+
+  return doc;
+}
+
+async function runCollectionAfterOperation<TResult>(args: {
+  collection: CollectionConfig;
+  context: HookContext;
+  hookArgs: Record<string, unknown>;
+  oboe: OboeRuntime;
+  operation: CollectionHookArgsBase["operation"];
+  req?: Request;
+  result: TResult;
+  user?: unknown;
+}) {
+  let result: unknown = args.result;
+
+  for (const hook of args.collection.hooks?.afterOperation ?? []) {
+    result = await hook({
+      ...collectionHookBase(args),
+      args: args.hookArgs,
+      result,
+    });
+  }
+
+  return result as TResult;
+}
+
+async function runCollectionReadPipeline(args: {
+  collection: CollectionConfig;
+  context: HookContext;
+  doc: OboeRecord;
+  oboe: OboeRuntime;
+  operation: CollectionHookArgsBase["operation"];
+  req?: Request;
+  user?: unknown;
+}) {
+  let doc = await attachResolvedFileUrl(args);
+  doc = await runCollectionBeforeRead({
+    ...args,
+    doc,
+  });
+  await runFieldHookPhase({
+    collection: args.collection,
+    context: args.context,
+    data: doc.data,
+    fields: args.collection.fields,
+    hookName: "afterRead",
+    oboe: args.oboe,
+    operation: args.operation === "delete" ? "read" : args.operation,
+    req: args.req,
+    user: args.user,
+  });
+
+  return runCollectionAfterRead({
+    ...args,
+    doc,
+  });
+}
+
+function globalHookBase(args: {
+  context: HookContext;
+  global: GlobalConfig;
+  oboe: OboeRuntime;
+  operation: GlobalOperation;
+  req?: Request;
+  user?: unknown;
+}) {
+  return {
+    context: args.context,
+    global: args.global,
+    oboe: args.oboe,
+    operation: args.operation,
+    req: args.req,
+    user: args.user,
+  };
+}
+
+async function runGlobalBeforeOperation(args: {
+  context: HookContext;
+  global: GlobalConfig;
+  hookArgs: Record<string, unknown>;
+  oboe: OboeRuntime;
+  operation: GlobalOperation;
+  req?: Request;
+  user?: unknown;
+}) {
+  for (const hook of args.global.hooks?.beforeOperation ?? []) {
+    await hook({
+      ...globalHookBase(args),
+      args: args.hookArgs,
+    });
+  }
+}
+
+async function runGlobalBeforeRead(args: {
+  context: HookContext;
+  doc: OboeGlobalRecord;
+  global: GlobalConfig;
+  oboe: OboeRuntime;
+  operation: GlobalOperation;
+  req?: Request;
+  user?: unknown;
+}) {
+  let doc = args.doc;
+
+  for (const hook of args.global.hooks?.beforeRead ?? []) {
+    doc = await hook({
+      ...globalHookBase(args),
+      doc,
+    });
+  }
+
+  return doc;
+}
+
+async function runGlobalAfterRead(args: {
+  context: HookContext;
+  doc: OboeGlobalRecord;
+  global: GlobalConfig;
+  oboe: OboeRuntime;
+  operation: GlobalOperation;
+  req?: Request;
+  user?: unknown;
+}) {
+  let doc = args.doc;
+
+  for (const hook of args.global.hooks?.afterRead ?? []) {
+    doc = await hook({
+      ...globalHookBase(args),
+      doc,
+    });
+  }
+
+  return doc;
+}
+
+async function runGlobalAfterOperation<TResult>(args: {
+  context: HookContext;
+  global: GlobalConfig;
+  hookArgs: Record<string, unknown>;
+  oboe: OboeRuntime;
+  operation: GlobalOperation;
+  req?: Request;
+  result: TResult;
+  user?: unknown;
+}) {
+  let result: unknown = args.result;
+
+  for (const hook of args.global.hooks?.afterOperation ?? []) {
+    result = await hook({
+      ...globalHookBase(args),
+      args: args.hookArgs,
+      result,
+    });
+  }
+
+  return result as TResult;
+}
+
+async function runGlobalReadPipeline(args: {
+  context: HookContext;
+  doc: OboeGlobalRecord;
+  global: GlobalConfig;
+  oboe: OboeRuntime;
+  operation: GlobalOperation;
+  req?: Request;
+  user?: unknown;
+}) {
+  const doc = await runGlobalBeforeRead(args);
+  await runFieldHookPhase({
+    context: args.context,
+    data: doc.data,
+    fields: args.global.fields,
+    global: args.global,
+    hookName: "afterRead",
+    oboe: args.oboe,
+    operation: args.operation,
+    req: args.req,
+    user: args.user,
+  });
+
+  return runGlobalAfterRead({
+    ...args,
+    doc,
+  });
 }
 
 function getUploadConfig(collection: CollectionConfig): UploadConfig | null {
@@ -907,8 +1483,10 @@ async function cleanupUploadedFile(args: {
 }
 
 async function runBeforeChange(args: {
+  context: HookContext;
   collection: CollectionConfig;
   data: Record<string, unknown>;
+  oboe: OboeRuntime;
   operation: "create" | "update";
   originalDoc?: OboeRecord | null;
   req?: Request;
@@ -918,12 +1496,30 @@ async function runBeforeChange(args: {
 
   for (const hook of args.collection.hooks?.beforeChange ?? []) {
     data = await hook({
-      context: {
-        collection: args.collection,
-        operation: args.operation,
-        req: args.req,
-        user: args.user,
-      },
+      ...collectionHookBase(args),
+      data,
+      originalDoc: args.originalDoc,
+    });
+  }
+
+  return data;
+}
+
+async function runBeforeValidate(args: {
+  context: HookContext;
+  collection: CollectionConfig;
+  data: Record<string, unknown>;
+  oboe: OboeRuntime;
+  operation: "create" | "update";
+  originalDoc?: OboeRecord | null;
+  req?: Request;
+  user?: unknown;
+}) {
+  let data = args.data;
+
+  for (const hook of args.collection.hooks?.beforeValidate ?? []) {
+    data = await hook({
+      ...collectionHookBase(args),
       data,
       originalDoc: args.originalDoc,
     });
@@ -933,8 +1529,10 @@ async function runBeforeChange(args: {
 }
 
 async function runAfterChange(args: {
+  context: HookContext;
   collection: CollectionConfig;
   doc: OboeRecord;
+  oboe: OboeRuntime;
   operation: "create" | "update";
   originalDoc?: OboeRecord | null;
   req?: Request;
@@ -944,12 +1542,82 @@ async function runAfterChange(args: {
 
   for (const hook of args.collection.hooks?.afterChange ?? []) {
     doc = await hook({
-      context: {
-        collection: args.collection,
-        operation: args.operation,
-        req: args.req,
-        user: args.user,
-      },
+      ...collectionHookBase(args),
+      doc,
+      originalDoc: args.originalDoc,
+    });
+  }
+
+  return doc;
+}
+
+async function runGlobalBeforeValidate(args: {
+  context: HookContext;
+  data: Record<string, unknown>;
+  global: GlobalConfig;
+  oboe: OboeRuntime;
+  originalDoc?: OboeGlobalRecord | null;
+  req?: Request;
+  user?: unknown;
+}) {
+  let data = args.data;
+
+  for (const hook of args.global.hooks?.beforeValidate ?? []) {
+    data = await hook({
+      ...globalHookBase({
+        ...args,
+        operation: "update",
+      }),
+      data,
+      originalDoc: args.originalDoc,
+    });
+  }
+
+  return data;
+}
+
+async function runGlobalBeforeChange(args: {
+  context: HookContext;
+  data: Record<string, unknown>;
+  global: GlobalConfig;
+  oboe: OboeRuntime;
+  originalDoc?: OboeGlobalRecord | null;
+  req?: Request;
+  user?: unknown;
+}) {
+  let data = args.data;
+
+  for (const hook of args.global.hooks?.beforeChange ?? []) {
+    data = await hook({
+      ...globalHookBase({
+        ...args,
+        operation: "update",
+      }),
+      data,
+      originalDoc: args.originalDoc,
+    });
+  }
+
+  return data;
+}
+
+async function runGlobalAfterChange(args: {
+  context: HookContext;
+  doc: OboeGlobalRecord;
+  global: GlobalConfig;
+  oboe: OboeRuntime;
+  originalDoc?: OboeGlobalRecord | null;
+  req?: Request;
+  user?: unknown;
+}) {
+  let doc = args.doc;
+
+  for (const hook of args.global.hooks?.afterChange ?? []) {
+    doc = await hook({
+      ...globalHookBase({
+        ...args,
+        operation: "update",
+      }),
       doc,
       originalDoc: args.originalDoc,
     });
@@ -959,18 +1627,22 @@ async function runAfterChange(args: {
 }
 
 async function prepareValidatedData(args: {
+  context: HookContext;
   collection: CollectionConfig;
   data: Record<string, unknown>;
   db: DatabaseAdapter;
   file?: UploadInputFile;
+  oboe: OboeRuntime;
   operation: "create" | "update";
   originalDoc?: OboeRecord | null;
   req?: Request;
   user?: unknown;
 }) {
-  const nextData = await runBeforeChange({
+  const nextData = await runBeforeValidate({
+    context: args.context,
     collection: args.collection,
     data: args.data,
+    oboe: args.oboe,
     operation: args.operation,
     originalDoc: args.originalDoc,
     req: args.req,
@@ -994,17 +1666,33 @@ async function prepareValidatedData(args: {
     })
   );
 
+  await runFieldHookPhase({
+    collection: args.collection,
+    context: args.context,
+    data: candidateData,
+    fields: args.collection.fields,
+    hookName: "beforeValidate",
+    oboe: args.oboe,
+    operation: args.operation,
+    originalDoc: args.originalDoc,
+    req: args.req,
+    user: args.user,
+  });
+
   issues.push(
     ...(await runBuiltInFieldValidation({
       candidateData,
       collection: args.collection,
       db: args.db,
+      fields: args.collection.fields,
     }))
   );
   issues.push(
     ...(await runFieldSchemaValidation({
       candidateData,
       collection: args.collection,
+      context: args.context,
+      fields: args.collection.fields,
       operation: args.operation,
       originalDoc: args.originalDoc,
       req: args.req,
@@ -1015,6 +1703,7 @@ async function prepareValidatedData(args: {
     ...(await runFieldValidatorValidation({
       candidateData,
       collection: args.collection,
+      fields: args.collection.fields,
       operation: args.operation,
       originalDoc: args.originalDoc,
       req: args.req,
@@ -1046,6 +1735,150 @@ async function prepareValidatedData(args: {
     );
   }
 
+  candidateData = await runBeforeChange({
+    context: args.context,
+    collection: args.collection,
+    data: candidateData,
+    oboe: args.oboe,
+    operation: args.operation,
+    originalDoc: args.originalDoc,
+    req: args.req,
+    user: args.user,
+  });
+  await runFieldHookPhase({
+    collection: args.collection,
+    context: args.context,
+    data: candidateData,
+    fields: args.collection.fields,
+    hookName: "beforeChange",
+    oboe: args.oboe,
+    operation: args.operation,
+    originalDoc: args.originalDoc,
+    req: args.req,
+    user: args.user,
+  });
+
+  if (issues.length > 0) {
+    throw new OboeValidationError(issues);
+  }
+
+  return candidateData;
+}
+
+async function prepareValidatedGlobalData(args: {
+  context: HookContext;
+  data: Record<string, unknown>;
+  db: DatabaseAdapter;
+  global: GlobalConfig;
+  oboe: OboeRuntime;
+  originalDoc?: OboeGlobalRecord | null;
+  req?: Request;
+  user?: unknown;
+}) {
+  const nextData = await runGlobalBeforeValidate({
+    context: args.context,
+    data: args.data,
+    global: args.global,
+    oboe: args.oboe,
+    originalDoc: args.originalDoc,
+    req: args.req,
+    user: args.user,
+  });
+  let candidateData = {
+    ...(args.originalDoc?.data ?? {}),
+    ...nextData,
+  };
+  const issues: ValidationIssue[] = [];
+
+  await runFieldHookPhase({
+    context: args.context,
+    data: candidateData,
+    fields: args.global.fields,
+    global: args.global,
+    hookName: "beforeValidate",
+    oboe: args.oboe,
+    operation: "update",
+    originalDoc: args.originalDoc,
+    req: args.req,
+    user: args.user,
+  });
+
+  issues.push(
+    ...(await runBuiltInFieldValidation({
+      candidateData,
+      db: args.db,
+      fields: args.global.fields,
+      global: args.global,
+    }))
+  );
+  issues.push(
+    ...(await runFieldSchemaValidation({
+      candidateData,
+      context: args.context,
+      fields: args.global.fields,
+      global: args.global,
+      operation: "update",
+      originalDoc: args.originalDoc,
+      req: args.req,
+      user: args.user,
+    }))
+  );
+  issues.push(
+    ...(await runFieldValidatorValidation({
+      candidateData,
+      fields: args.global.fields,
+      global: args.global,
+      operation: "update",
+      originalDoc: args.originalDoc,
+      req: args.req,
+      user: args.user,
+    }))
+  );
+
+  const globalSchemaResult = await runGlobalSchemaValidation({
+    candidateData,
+    global: args.global,
+    originalDoc: args.originalDoc,
+    req: args.req,
+    user: args.user,
+  });
+  candidateData = globalSchemaResult.candidateData;
+  issues.push(...globalSchemaResult.issues);
+
+  if (globalSchemaResult.issues.length === 0) {
+    issues.push(
+      ...(await runGlobalValidatorValidation({
+        candidateData,
+        global: args.global,
+        originalDoc: args.originalDoc,
+        req: args.req,
+        user: args.user,
+      }))
+    );
+  }
+
+  candidateData = await runGlobalBeforeChange({
+    context: args.context,
+    data: candidateData,
+    global: args.global,
+    oboe: args.oboe,
+    originalDoc: args.originalDoc,
+    req: args.req,
+    user: args.user,
+  });
+  await runFieldHookPhase({
+    context: args.context,
+    data: candidateData,
+    fields: args.global.fields,
+    global: args.global,
+    hookName: "beforeChange",
+    oboe: args.oboe,
+    operation: "update",
+    originalDoc: args.originalDoc,
+    req: args.req,
+    user: args.user,
+  });
+
   if (issues.length > 0) {
     throw new OboeValidationError(issues);
   }
@@ -1059,6 +1892,28 @@ function toPublicDocument(record: OboeRecord): OboeDocument {
     createdAt: record.createdAt,
     id: record.id,
     updatedAt: record.updatedAt,
+  };
+}
+
+function toPublicGlobalDocument(record: OboeGlobalRecord): OboeGlobalDocument {
+  return {
+    ...record.data,
+    createdAt: record.createdAt,
+    updatedAt: record.updatedAt,
+  };
+}
+
+function cloneRecord(record: OboeRecord): OboeRecord {
+  return {
+    ...record,
+    data: structuredClone(record.data),
+  };
+}
+
+function cloneGlobalRecord(record: OboeGlobalRecord): OboeGlobalRecord {
+  return {
+    ...record,
+    data: structuredClone(record.data),
   };
 }
 
@@ -1101,6 +1956,7 @@ export function createOboeRuntime(args: {
 
   const loadVisibleRecord = async (loadArgs: {
     collectionSlug: string;
+    context: HookContext;
     id: string;
     overrideAccess?: boolean;
     req?: Request;
@@ -1130,9 +1986,12 @@ export function createOboeRuntime(args: {
       return null;
     }
 
-    return runAfterRead({
+    return runCollectionReadPipeline({
       collection,
-      doc: record,
+      context: loadArgs.context,
+      doc: cloneRecord(record),
+      oboe: runtime,
+      operation: "read",
       req: loadArgs.req,
       user: loadArgs.user,
     });
@@ -1140,6 +1999,7 @@ export function createOboeRuntime(args: {
 
   const materializeDocument = async (materializeArgs: {
     collectionSlug: string;
+    context: HookContext;
     depth?: number;
     overrideAccess?: boolean;
     record: OboeRecord;
@@ -1190,6 +2050,7 @@ export function createOboeRuntime(args: {
 
       const related = await loadVisibleRecord({
         collectionSlug: field.relationTo,
+        context: materializeArgs.context,
         id: rawValue,
         overrideAccess: materializeArgs.overrideAccess,
         req: materializeArgs.req,
@@ -1202,6 +2063,7 @@ export function createOboeRuntime(args: {
 
       baseDocument[field.name] = await materializeDocument({
         collectionSlug: field.relationTo,
+        context: materializeArgs.context,
         depth: allowedDepth - 1,
         overrideAccess: materializeArgs.overrideAccess,
         record: related,
@@ -1311,6 +2173,15 @@ export function createOboeRuntime(args: {
       user,
     }) {
       const collectionConfig = getCompiledCollection(schema, collection);
+      const context = getOrCreateHookContext(req);
+      const operationArgs: Record<string, unknown> = {
+        collection,
+        data,
+        depth,
+        file,
+        overrideAccess,
+        select,
+      };
 
       if (
         !(await canAccess({
@@ -1327,11 +2198,23 @@ export function createOboeRuntime(args: {
         );
       }
 
+      await runCollectionBeforeOperation({
+        collection: collectionConfig,
+        context,
+        hookArgs: operationArgs,
+        oboe: runtime,
+        operation: "create",
+        req,
+        user,
+      });
+
       const candidateData = await prepareValidatedData({
+        context,
         collection: collectionConfig,
         data,
         db: args.db,
         file,
+        oboe: runtime,
         operation: "create",
         req,
         user,
@@ -1363,9 +2246,23 @@ export function createOboeRuntime(args: {
         });
         throw error;
       }
+      created = cloneRecord(created);
+      await runFieldHookPhase({
+        collection: collectionConfig,
+        context,
+        data: created.data,
+        fields: collectionConfig.fields,
+        hookName: "afterChange",
+        oboe: runtime,
+        operation: "create",
+        req,
+        user,
+      });
       const doc = await runAfterChange({
+        context,
         collection: collectionConfig,
         doc: created,
+        oboe: runtime,
         operation: "create",
         req,
         user,
@@ -1384,15 +2281,19 @@ export function createOboeRuntime(args: {
         id: doc.id,
       });
 
-      const readable = await runAfterRead({
+      const readable = await runCollectionReadPipeline({
         collection: collectionConfig,
+        context,
         doc,
+        oboe: runtime,
+        operation: "create",
         req,
         user,
       });
 
-      return materializeDocument({
+      const result = await materializeDocument({
         collectionSlug: collection,
+        context,
         depth,
         overrideAccess,
         record: readable,
@@ -1400,10 +2301,29 @@ export function createOboeRuntime(args: {
         select,
         user,
       });
+
+      return runCollectionAfterOperation({
+        collection: collectionConfig,
+        context,
+        hookArgs: operationArgs,
+        oboe: runtime,
+        operation: "create",
+        req,
+        result,
+        user,
+      });
     },
     db: args.db,
     async delete({ collection, depth, id, overrideAccess, req, select, user }) {
       const collectionConfig = getCompiledCollection(schema, collection);
+      const context = getOrCreateHookContext(req);
+      const operationArgs: Record<string, unknown> = {
+        collection,
+        depth,
+        id,
+        overrideAccess,
+        select,
+      };
 
       if (
         !(await canAccess({
@@ -1418,12 +2338,58 @@ export function createOboeRuntime(args: {
         throw new Error(`Access denied for delete on "${collection}".`);
       }
 
-      const doc = await args.db.delete({
+      await runCollectionBeforeOperation({
+        collection: collectionConfig,
+        context,
+        hookArgs: operationArgs,
+        oboe: runtime,
+        operation: "delete",
+        req,
+        user,
+      });
+
+      let existing = await args.db.findById({
+        collection,
+        id,
+      });
+      existing = existing ? cloneRecord(existing) : null;
+      if (existing) {
+        for (const hook of collectionConfig.hooks?.beforeDelete ?? []) {
+          existing = await hook({
+            ...collectionHookBase({
+              collection: collectionConfig,
+              context,
+              oboe: runtime,
+              operation: "delete",
+              req,
+              user,
+            }),
+            doc: existing,
+          });
+        }
+      }
+
+      let doc = await args.db.delete({
         collection,
         id,
       });
 
       if (doc) {
+        doc = cloneRecord(doc);
+        for (const hook of collectionConfig.hooks?.afterDelete ?? []) {
+          doc = await hook({
+            ...collectionHookBase({
+              collection: collectionConfig,
+              context,
+              oboe: runtime,
+              operation: "delete",
+              req,
+              user,
+            }),
+            doc,
+          });
+        }
+
         try {
           await cleanupUploadedFile({
             collection: collectionConfig,
@@ -1446,9 +2412,10 @@ export function createOboeRuntime(args: {
         await events.emit(`${collection}.deleted`, { collection, id });
       }
 
-      return doc
-        ? materializeDocument({
+      const result = doc
+        ? await materializeDocument({
             collectionSlug: collection,
+            context,
             depth,
             overrideAccess,
             record: doc,
@@ -1457,6 +2424,17 @@ export function createOboeRuntime(args: {
             user,
           })
         : null;
+
+      return runCollectionAfterOperation({
+        collection: collectionConfig,
+        context,
+        hookArgs: operationArgs,
+        oboe: runtime,
+        operation: "delete",
+        req,
+        result,
+        user,
+      });
     },
     email: {
       getClient<T = unknown>(name: string): T | undefined {
@@ -1466,6 +2444,12 @@ export function createOboeRuntime(args: {
     events,
     async find({ collection, overrideAccess, query, req, user }) {
       const collectionConfig = getCompiledCollection(schema, collection);
+      const context = getOrCreateHookContext(req);
+      const operationArgs: Record<string, unknown> = {
+        collection,
+        overrideAccess,
+        query,
+      };
 
       if (
         !(await canAccess({
@@ -1479,10 +2463,22 @@ export function createOboeRuntime(args: {
         throw new Error(`Access denied for read on "${collection}".`);
       }
 
+      await runCollectionBeforeOperation({
+        collection: collectionConfig,
+        context,
+        hookArgs: operationArgs,
+        oboe: runtime,
+        operation: "read",
+        req,
+        user,
+      });
+
       const records = filterRecords(
-        await args.db.find({
-          collection,
-        }),
+        (
+          await args.db.find({
+            collection,
+          })
+        ).map((record) => cloneRecord(record)),
         query
       );
       const page = paginateDocuments(records, query);
@@ -1490,11 +2486,15 @@ export function createOboeRuntime(args: {
         page.docs.map(async (record) =>
           materializeDocument({
             collectionSlug: collection,
+            context,
             depth: query?.depth,
             overrideAccess,
-            record: await runAfterRead({
+            record: await runCollectionReadPipeline({
               collection: collectionConfig,
+              context,
               doc: record,
+              oboe: runtime,
+              operation: "read",
               req,
               user,
             }),
@@ -1505,10 +2505,19 @@ export function createOboeRuntime(args: {
         )
       );
 
-      return {
-        ...page,
-        docs,
-      };
+      return runCollectionAfterOperation({
+        collection: collectionConfig,
+        context,
+        hookArgs: operationArgs,
+        oboe: runtime,
+        operation: "read",
+        req,
+        result: {
+          ...page,
+          docs,
+        },
+        user,
+      });
     },
     async findById({
       collection,
@@ -1519,8 +2528,29 @@ export function createOboeRuntime(args: {
       select,
       user,
     }) {
+      const context = getOrCreateHookContext(req);
+      const collectionConfig = getCompiledCollection(schema, collection);
+      const operationArgs: Record<string, unknown> = {
+        collection,
+        depth,
+        id,
+        overrideAccess,
+        select,
+      };
+
+      await runCollectionBeforeOperation({
+        collection: collectionConfig,
+        context,
+        hookArgs: operationArgs,
+        oboe: runtime,
+        operation: "read",
+        req,
+        user,
+      });
+
       const doc = await loadVisibleRecord({
         collectionSlug: collection,
+        context,
         id,
         overrideAccess,
         req,
@@ -1531,13 +2561,82 @@ export function createOboeRuntime(args: {
         return null;
       }
 
-      return materializeDocument({
+      const result = await materializeDocument({
         collectionSlug: collection,
+        context,
         depth,
         overrideAccess,
         record: doc,
         req,
         select,
+        user,
+      });
+
+      return runCollectionAfterOperation({
+        collection: collectionConfig,
+        context,
+        hookArgs: operationArgs,
+        oboe: runtime,
+        operation: "read",
+        req,
+        result,
+        user,
+      });
+    },
+    async findGlobal({ req, slug, user }) {
+      const globalConfig = getCompiledGlobal(schema, slug);
+      const context = getOrCreateHookContext(req);
+      const operationArgs: Record<string, unknown> = {
+        slug,
+      };
+
+      if (
+        !(await canAccessGlobal({
+          global: globalConfig,
+          operation: "read",
+          req,
+          user,
+        }))
+      ) {
+        throw new Error(`Access denied for read on global "${slug}".`);
+      }
+
+      await runGlobalBeforeOperation({
+        context,
+        global: globalConfig,
+        hookArgs: operationArgs,
+        oboe: runtime,
+        operation: "read",
+        req,
+        user,
+      });
+
+      const doc = await args.db.findGlobal({
+        slug,
+      });
+
+      if (!doc) {
+        return null;
+      }
+
+      const readable = await runGlobalReadPipeline({
+        context,
+        doc: cloneGlobalRecord(doc),
+        global: globalConfig,
+        oboe: runtime,
+        operation: "read",
+        req,
+        user,
+      });
+
+      return runGlobalAfterOperation({
+        context,
+        global: globalConfig,
+        hookArgs: operationArgs,
+        oboe: runtime,
+        operation: "read",
+        req,
+        result: toPublicGlobalDocument(readable),
         user,
       });
     },
@@ -1589,6 +2688,16 @@ export function createOboeRuntime(args: {
       user,
     }) {
       const collectionConfig = getCompiledCollection(schema, collection);
+      const context = getOrCreateHookContext(req);
+      const operationArgs: Record<string, unknown> = {
+        collection,
+        data,
+        depth,
+        file,
+        id,
+        overrideAccess,
+        select,
+      };
 
       if (
         !(await canAccess({
@@ -1604,12 +2713,25 @@ export function createOboeRuntime(args: {
         throw new Error(`Access denied for update on "${collection}".`);
       }
 
-      const existing = await args.db.findById({ collection, id });
+      await runCollectionBeforeOperation({
+        collection: collectionConfig,
+        context,
+        hookArgs: operationArgs,
+        oboe: runtime,
+        operation: "update",
+        req,
+        user,
+      });
+
+      const existingRecord = await args.db.findById({ collection, id });
+      const existing = existingRecord ? cloneRecord(existingRecord) : null;
       const candidateData = await prepareValidatedData({
+        context,
         collection: collectionConfig,
         data,
         db: args.db,
         file,
+        oboe: runtime,
         operation: "update",
         originalDoc: existing,
         req,
@@ -1654,6 +2776,7 @@ export function createOboeRuntime(args: {
         });
         return null;
       }
+      updated = cloneRecord(updated);
 
       if (uploadedFile && previousFile) {
         try {
@@ -1668,9 +2791,23 @@ export function createOboeRuntime(args: {
         }
       }
 
+      await runFieldHookPhase({
+        collection: collectionConfig,
+        context,
+        data: updated.data,
+        fields: collectionConfig.fields,
+        hookName: "afterChange",
+        oboe: runtime,
+        operation: "update",
+        originalDoc: existing,
+        req,
+        user,
+      });
       const doc = await runAfterChange({
+        context,
         collection: collectionConfig,
         doc: updated,
+        oboe: runtime,
         operation: "update",
         originalDoc: existing,
         req,
@@ -1687,20 +2824,129 @@ export function createOboeRuntime(args: {
       });
       await events.emit(`${collection}.updated`, { collection, id });
 
-      const readable = await runAfterRead({
+      const readable = await runCollectionReadPipeline({
         collection: collectionConfig,
+        context,
         doc,
+        oboe: runtime,
+        operation: "update",
         req,
         user,
       });
 
-      return materializeDocument({
+      const result = await materializeDocument({
         collectionSlug: collection,
+        context,
         depth,
         overrideAccess,
         record: readable,
         req,
         select,
+        user,
+      });
+
+      return runCollectionAfterOperation({
+        collection: collectionConfig,
+        context,
+        hookArgs: operationArgs,
+        oboe: runtime,
+        operation: "update",
+        req,
+        result,
+        user,
+      });
+    },
+    async updateGlobal({ data, req, slug, user }) {
+      const globalConfig = getCompiledGlobal(schema, slug);
+      const context = getOrCreateHookContext(req);
+      const operationArgs: Record<string, unknown> = {
+        data,
+        slug,
+      };
+
+      if (
+        !(await canAccessGlobal({
+          data,
+          global: globalConfig,
+          operation: "update",
+          req,
+          user,
+        }))
+      ) {
+        throw new Error(`Access denied for update on global "${slug}".`);
+      }
+
+      await runGlobalBeforeOperation({
+        context,
+        global: globalConfig,
+        hookArgs: operationArgs,
+        oboe: runtime,
+        operation: "update",
+        req,
+        user,
+      });
+
+      const existingRecord = await args.db.findGlobal({
+        slug,
+      });
+      const existing = existingRecord
+        ? cloneGlobalRecord(existingRecord)
+        : null;
+      const candidateData = await prepareValidatedGlobalData({
+        context,
+        data,
+        db: args.db,
+        global: globalConfig,
+        oboe: runtime,
+        originalDoc: existing,
+        req,
+        user,
+      });
+      let updated = await args.db.updateGlobal({
+        data: candidateData,
+        slug,
+      });
+      updated = cloneGlobalRecord(updated);
+      await runFieldHookPhase({
+        context,
+        data: updated.data,
+        fields: globalConfig.fields,
+        global: globalConfig,
+        hookName: "afterChange",
+        oboe: runtime,
+        operation: "update",
+        originalDoc: existing,
+        req,
+        user,
+      });
+      updated = await runGlobalAfterChange({
+        context,
+        doc: updated,
+        global: globalConfig,
+        oboe: runtime,
+        originalDoc: existing,
+        req,
+        user,
+      });
+
+      const readable = await runGlobalReadPipeline({
+        context,
+        doc: updated,
+        global: globalConfig,
+        oboe: runtime,
+        operation: "update",
+        req,
+        user,
+      });
+
+      return runGlobalAfterOperation({
+        context,
+        global: globalConfig,
+        hookArgs: operationArgs,
+        oboe: runtime,
+        operation: "update",
+        req,
+        result: toPublicGlobalDocument(readable),
         user,
       });
     },

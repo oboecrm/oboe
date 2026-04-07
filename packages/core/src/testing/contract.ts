@@ -43,5 +43,33 @@ export function runDatabaseAdapterContract(args: {
         })
       ).toHaveLength(0);
     });
+
+    it("supports global read and update", async () => {
+      const adapter = args.createAdapter();
+      expect(
+        await adapter.findGlobal({
+          slug: "site-settings",
+        })
+      ).toBeNull();
+
+      const updated = await adapter.updateGlobal({
+        data: {
+          title: "Oboe",
+        },
+        slug: "site-settings",
+      });
+
+      expect(updated.data.title).toBe("Oboe");
+      expect(
+        await adapter.findGlobal({
+          slug: "site-settings",
+        })
+      ).toMatchObject({
+        data: {
+          title: "Oboe",
+        },
+        slug: "site-settings",
+      });
+    });
   });
 }

@@ -2,6 +2,7 @@ import type {
   CompiledCollection,
   CompiledSchema,
   FieldConfig,
+  GlobalConfig,
   ModuleConfig,
   OboeConfig,
   StorageServeMode,
@@ -62,7 +63,7 @@ export function compileSchema(config: OboeConfig): CompiledSchema {
   const globalSlugs = new Set<string>();
   const modules = new Map<string, ModuleConfig>();
   const collections = new Map<string, CompiledCollection>();
-  const globals = new Map();
+  const globals = new Map<string, GlobalConfig>();
 
   for (const moduleConfig of config.modules) {
     assertUnique(moduleConfig.slug, moduleSlugs, "module");
@@ -132,4 +133,13 @@ export function getCompiledCollection(schema: CompiledSchema, slug: string) {
   }
 
   return collection;
+}
+
+export function getCompiledGlobal(schema: CompiledSchema, slug: string) {
+  const global = schema.globals.get(slug);
+  if (!global) {
+    throw new Error(`Unknown global "${slug}".`);
+  }
+
+  return global;
 }

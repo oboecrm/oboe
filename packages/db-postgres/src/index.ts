@@ -4,6 +4,7 @@ import type {
   CompiledSchema,
   DatabaseAdapter,
   JobRequest,
+  OboeGlobalRecord,
   OboeRecord,
 } from "@oboe/core";
 import { RelationalStorage } from "@oboe/storage-relational";
@@ -38,6 +39,32 @@ function isPool(
   value: PostgresPoolLike | PostgresQueryable
 ): value is PostgresPoolLike {
   return typeof (value as PostgresPoolLike).connect === "function";
+}
+
+const GLOBAL_COLLECTION = "__oboe_globals";
+
+function withoutGlobalSlug(data: Record<string, unknown>) {
+  const { slug: _slug, ...rest } = data;
+  return rest;
+}
+
+async function findStoredGlobal(
+  storage: RelationalStorage,
+  slug: string
+): Promise<OboeRecord | null> {
+  const [record] = await storage.find({
+    collection: GLOBAL_COLLECTION,
+    query: {
+      limit: 1,
+      where: {
+        slug: {
+          eq: slug,
+        },
+      },
+    },
+  });
+
+  return record ?? null;
 }
 
 export class PostgresAdapter implements DatabaseAdapter {
@@ -113,6 +140,21 @@ export class PostgresAdapter implements DatabaseAdapter {
     return this.storage.findById(args);
   }
 
+  async findGlobal(args: { slug: string }): Promise<OboeGlobalRecord | null> {
+    const record = await findStoredGlobal(this.storage, args.slug);
+
+    if (!record) {
+      return null;
+    }
+
+    return {
+      createdAt: record.createdAt,
+      data: withoutGlobalSlug(record.data),
+      slug: args.slug,
+      updatedAt: record.updatedAt,
+    };
+  }
+
   async initialize(_schema: CompiledSchema): Promise<void> {
     return this.storage.initialize(_schema);
   }
@@ -151,6 +193,46 @@ export class PostgresAdapter implements DatabaseAdapter {
     id: string;
   }): Promise<OboeRecord | null> {
     return this.storage.update(args);
+  }
+
+  async updateGlobal(args: {
+    data: Record<string, unknown>;
+    slug: string;
+  }): Promise<OboeGlobalRecord> {
+    const existing = await findStoredGlobal(this.storage, args.slug);
+
+    const updated = await this.storage.update({
+      collection: GLOBAL_COLLECTION,
+      data: {
+        ...args.data,
+        slug: args.slug,
+      },
+      id: existing?.id ?? "",
+    });
+
+    if (updated && existing) {
+      return {
+        createdAt: updated.createdAt,
+        data: withoutGlobalSlug(updated.data),
+        slug: args.slug,
+        updatedAt: updated.updatedAt,
+      };
+    }
+
+    const created = await this.storage.create({
+      collection: GLOBAL_COLLECTION,
+      data: {
+        ...args.data,
+        slug: args.slug,
+      },
+    });
+
+    return {
+      createdAt: created.createdAt,
+      data: withoutGlobalSlug(created.data),
+      slug: args.slug,
+      updatedAt: created.updatedAt,
+    };
   }
 }
 

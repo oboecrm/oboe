@@ -74,11 +74,13 @@ export interface StandardSchemaLike<TValue = unknown> {
 }
 
 export interface FieldValidationContext {
-  collection: CollectionConfig;
+  collection?: CollectionConfig;
   data: Record<string, unknown>;
   field: FieldConfig;
-  operation: Exclude<CollectionOperation, "delete" | "read">;
-  originalDoc?: OboeRecord | null;
+  global?: GlobalConfig;
+  operation: FieldHookOperation;
+  originalDoc?: OboeGlobalRecord | OboeRecord | null;
+  path: string[];
   req?: Request;
   user?: unknown;
 }
@@ -92,12 +94,25 @@ export interface CollectionValidationContext {
   user?: unknown;
 }
 
+export interface GlobalValidationContext {
+  data: Record<string, unknown>;
+  global: GlobalConfig;
+  operation: "update";
+  originalDoc?: OboeGlobalRecord | null;
+  req?: Request;
+  user?: unknown;
+}
+
 export type FieldSchema =
   | SchemaAdapter<FieldValidationContext>
   | StandardSchemaLike;
 
 export type CollectionSchema =
   | SchemaAdapter<CollectionValidationContext, Record<string, unknown>>
+  | StandardSchemaLike<Record<string, unknown>>;
+
+export type GlobalSchema =
+  | SchemaAdapter<GlobalValidationContext, Record<string, unknown>>
   | StandardSchemaLike<Record<string, unknown>>;
 
 export type FieldValidator = (args: {
@@ -107,6 +122,11 @@ export type FieldValidator = (args: {
 
 export type CollectionValidator = (args: {
   context: CollectionValidationContext;
+  data: Record<string, unknown>;
+}) => ValidationIssueResult | Promise<ValidationIssueResult>;
+
+export type GlobalValidator = (args: {
+  context: GlobalValidationContext;
   data: Record<string, unknown>;
 }) => ValidationIssueResult | Promise<ValidationIssueResult>;
 
@@ -145,6 +165,7 @@ export interface SelectFieldOption {
 }
 
 export interface FieldConfig extends BaseFieldConfig {
+  hooks?: FieldHooks;
   options?: SelectFieldOption[];
   relationTo?: string;
   schema?: FieldSchema;
@@ -305,34 +326,222 @@ export type CollectionAccessResolver = (
   context: CollectionAccessContext
 ) => boolean | Promise<boolean>;
 
-export interface HookContext {
-  collection: CollectionConfig;
-  operation: CollectionOperation;
+export interface GlobalAccessContext {
+  action: GlobalOperation;
+  data?: Record<string, unknown>;
+  global: GlobalConfig;
   req?: Request;
   user?: unknown;
 }
 
-export type BeforeChangeHook = (args: {
+export type GlobalAccessResolver = (
+  context: GlobalAccessContext
+) => boolean | Promise<boolean>;
+
+export interface HookContext extends Record<string, unknown> {}
+
+export interface HookArgsBase {
   context: HookContext;
+  oboe: OboeRuntime;
+  req?: Request;
+  user?: unknown;
+}
+
+export interface CollectionHookArgsBase extends HookArgsBase {
+  collection: CollectionConfig;
+  operation: CollectionOperation;
+}
+
+export interface CollectionBeforeOperationHookArgs
+  extends CollectionHookArgsBase {
+  args: Record<string, unknown>;
+}
+
+export type CollectionBeforeOperationHook = (
+  args: CollectionBeforeOperationHookArgs
+) => void | Promise<void>;
+
+export interface CollectionBeforeValidateHookArgs
+  extends CollectionHookArgsBase {
   data: Record<string, unknown>;
   originalDoc?: OboeRecord | null;
-}) => Record<string, unknown> | Promise<Record<string, unknown>>;
+}
 
-export type AfterChangeHook = (args: {
-  context: HookContext;
+export type CollectionBeforeValidateHook = (
+  args: CollectionBeforeValidateHookArgs
+) => Record<string, unknown> | Promise<Record<string, unknown>>;
+
+export interface CollectionBeforeChangeHookArgs extends CollectionHookArgsBase {
+  data: Record<string, unknown>;
+  originalDoc?: OboeRecord | null;
+}
+
+export type CollectionBeforeChangeHook = (
+  args: CollectionBeforeChangeHookArgs
+) => Record<string, unknown> | Promise<Record<string, unknown>>;
+
+export interface CollectionAfterChangeHookArgs extends CollectionHookArgsBase {
   doc: OboeRecord;
   originalDoc?: OboeRecord | null;
-}) => OboeRecord | Promise<OboeRecord>;
+}
 
-export type AfterReadHook = (args: {
-  context: HookContext;
+export type CollectionAfterChangeHook = (
+  args: CollectionAfterChangeHookArgs
+) => OboeRecord | Promise<OboeRecord>;
+
+export interface CollectionReadHookArgs extends CollectionHookArgsBase {
   doc: OboeRecord;
-}) => OboeRecord | Promise<OboeRecord>;
+}
+
+export type CollectionBeforeReadHook = (
+  args: CollectionReadHookArgs
+) => OboeRecord | Promise<OboeRecord>;
+
+export type CollectionAfterReadHook = (
+  args: CollectionReadHookArgs
+) => OboeRecord | Promise<OboeRecord>;
+
+export interface CollectionDeleteHookArgs extends CollectionHookArgsBase {
+  doc: OboeRecord;
+}
+
+export type CollectionBeforeDeleteHook = (
+  args: CollectionDeleteHookArgs
+) => OboeRecord | Promise<OboeRecord>;
+
+export type CollectionAfterDeleteHook = (
+  args: CollectionDeleteHookArgs
+) => OboeRecord | Promise<OboeRecord>;
+
+export interface CollectionAfterOperationHookArgs
+  extends CollectionHookArgsBase {
+  args: Record<string, unknown>;
+  result: unknown;
+}
+
+export type CollectionAfterOperationHook = (
+  args: CollectionAfterOperationHookArgs
+) => unknown | Promise<unknown>;
+
+export interface GlobalHookArgsBase extends HookArgsBase {
+  global: GlobalConfig;
+  operation: GlobalOperation;
+}
+
+export interface GlobalBeforeOperationHookArgs extends GlobalHookArgsBase {
+  args: Record<string, unknown>;
+}
+
+export type GlobalBeforeOperationHook = (
+  args: GlobalBeforeOperationHookArgs
+) => void | Promise<void>;
+
+export interface GlobalBeforeValidateHookArgs extends GlobalHookArgsBase {
+  data: Record<string, unknown>;
+  originalDoc?: OboeGlobalRecord | null;
+}
+
+export type GlobalBeforeValidateHook = (
+  args: GlobalBeforeValidateHookArgs
+) => Record<string, unknown> | Promise<Record<string, unknown>>;
+
+export interface GlobalBeforeChangeHookArgs extends GlobalHookArgsBase {
+  data: Record<string, unknown>;
+  originalDoc?: OboeGlobalRecord | null;
+}
+
+export type GlobalBeforeChangeHook = (
+  args: GlobalBeforeChangeHookArgs
+) => Record<string, unknown> | Promise<Record<string, unknown>>;
+
+export interface GlobalAfterChangeHookArgs extends GlobalHookArgsBase {
+  doc: OboeGlobalRecord;
+  originalDoc?: OboeGlobalRecord | null;
+}
+
+export type GlobalAfterChangeHook = (
+  args: GlobalAfterChangeHookArgs
+) => OboeGlobalRecord | Promise<OboeGlobalRecord>;
+
+export interface GlobalReadHookArgs extends GlobalHookArgsBase {
+  doc: OboeGlobalRecord;
+}
+
+export type GlobalBeforeReadHook = (
+  args: GlobalReadHookArgs
+) => OboeGlobalRecord | Promise<OboeGlobalRecord>;
+
+export type GlobalAfterReadHook = (
+  args: GlobalReadHookArgs
+) => OboeGlobalRecord | Promise<OboeGlobalRecord>;
+
+export interface GlobalAfterOperationHookArgs extends GlobalHookArgsBase {
+  args: Record<string, unknown>;
+  result: unknown;
+}
+
+export type GlobalAfterOperationHook = (
+  args: GlobalAfterOperationHookArgs
+) => unknown | Promise<unknown>;
+
+export interface FieldHookScope {
+  collection?: CollectionConfig;
+  global?: GlobalConfig;
+}
+
+export interface FieldHookArgsBase extends FieldHookScope, HookArgsBase {
+  data: Record<string, unknown>;
+  field: FieldConfig;
+  operation: FieldHookOperation;
+  originalDoc?: OboeGlobalRecord | OboeRecord | null;
+  path: string[];
+  siblingData: Record<string, unknown>;
+  value: unknown;
+}
+
+export type FieldBeforeValidateHook = (
+  args: FieldHookArgsBase
+) => unknown | Promise<unknown>;
+
+export type FieldBeforeChangeHook = (
+  args: FieldHookArgsBase
+) => unknown | Promise<unknown>;
+
+export type FieldAfterChangeHook = (
+  args: FieldHookArgsBase
+) => unknown | Promise<unknown>;
+
+export type FieldAfterReadHook = (
+  args: FieldHookArgsBase
+) => unknown | Promise<unknown>;
+
+export interface FieldHooks {
+  afterChange?: FieldAfterChangeHook[];
+  afterRead?: FieldAfterReadHook[];
+  beforeChange?: FieldBeforeChangeHook[];
+  beforeValidate?: FieldBeforeValidateHook[];
+}
 
 export interface CollectionHooks {
-  afterChange?: AfterChangeHook[];
-  afterRead?: AfterReadHook[];
-  beforeChange?: BeforeChangeHook[];
+  afterChange?: CollectionAfterChangeHook[];
+  afterDelete?: CollectionAfterDeleteHook[];
+  afterOperation?: CollectionAfterOperationHook[];
+  afterRead?: CollectionAfterReadHook[];
+  beforeChange?: CollectionBeforeChangeHook[];
+  beforeDelete?: CollectionBeforeDeleteHook[];
+  beforeOperation?: CollectionBeforeOperationHook[];
+  beforeRead?: CollectionBeforeReadHook[];
+  beforeValidate?: CollectionBeforeValidateHook[];
+}
+
+export interface GlobalHooks {
+  afterChange?: GlobalAfterChangeHook[];
+  afterOperation?: GlobalAfterOperationHook[];
+  afterRead?: GlobalAfterReadHook[];
+  beforeChange?: GlobalBeforeChangeHook[];
+  beforeOperation?: GlobalBeforeOperationHook[];
+  beforeRead?: GlobalBeforeReadHook[];
+  beforeValidate?: GlobalBeforeValidateHook[];
 }
 
 export interface CollectionAdminConfig {
@@ -359,8 +568,12 @@ export interface CollectionConfig {
 }
 
 export interface GlobalConfig {
+  access?: Partial<Record<GlobalOperation, GlobalAccessResolver>>;
   fields: FieldConfig[];
+  hooks?: GlobalHooks;
+  schema?: GlobalSchema;
   slug: string;
+  validate?: GlobalValidator;
 }
 
 export interface ModuleConfig {
@@ -501,6 +714,19 @@ export interface OboeDocument {
   [key: string]: unknown;
 }
 
+export interface OboeGlobalRecord {
+  createdAt: string;
+  data: Record<string, unknown>;
+  slug: string;
+  updatedAt: string;
+}
+
+export interface OboeGlobalDocument {
+  createdAt: string;
+  updatedAt: string;
+  [key: string]: unknown;
+}
+
 export interface FindResult<TDocument = OboeDocument> {
   docs: TDocument[];
   hasNextPage: boolean;
@@ -572,6 +798,7 @@ export interface DatabaseAdapter {
     collection: string;
     id: string;
   }) => Promise<OboeRecord | null>;
+  findGlobal: (args: { slug: string }) => Promise<OboeGlobalRecord | null>;
   initialize?: (schema: CompiledSchema) => Promise<void>;
   recordAudit?: (entry: AuditEntry) => Promise<void>;
   transaction?: <T>(
@@ -582,6 +809,10 @@ export interface DatabaseAdapter {
     data: Record<string, unknown>;
     id: string;
   }) => Promise<OboeRecord | null>;
+  updateGlobal: (args: {
+    data: Record<string, unknown>;
+    slug: string;
+  }) => Promise<OboeGlobalRecord>;
 }
 
 export interface OboeRuntime {
@@ -652,6 +883,11 @@ export interface OboeRuntime {
     select?: SelectShape;
     user?: unknown;
   }) => Promise<OboeDocument | null>;
+  findGlobal: (args: {
+    req?: Request;
+    slug: string;
+    user?: unknown;
+  }) => Promise<OboeGlobalDocument | null>;
   graphql: GraphQLExecutor;
   initialize: () => Promise<void>;
   jobs: JobDispatcher;
@@ -669,6 +905,14 @@ export interface OboeRuntime {
     select?: SelectShape;
     user?: unknown;
   }) => Promise<OboeDocument | null>;
+  updateGlobal: (args: {
+    data: Record<string, unknown>;
+    req?: Request;
+    slug: string;
+    user?: unknown;
+  }) => Promise<OboeGlobalDocument>;
 }
 
 export type CollectionOperation = "create" | "delete" | "read" | "update";
+export type GlobalOperation = "read" | "update";
+export type FieldHookOperation = "create" | "read" | "update";

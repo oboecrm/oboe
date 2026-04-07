@@ -4,8 +4,11 @@ import type {
   CollectionQuery,
   DatabaseAdapter,
   JobRequest,
+  OboeGlobalRecord,
   OboeRecord,
 } from "../types.js";
+
+const GLOBAL_COLLECTION = "__oboe_globals";
 
 function randomId() {
   return Math.random().toString(36).slice(2, 10);
@@ -78,6 +81,24 @@ export class MemoryAdapter implements DatabaseAdapter {
     return this.store.get(args.collection)?.get(args.id) ?? null;
   }
 
+  async findGlobal(args: { slug: string }): Promise<OboeGlobalRecord | null> {
+    const record = await this.findById({
+      collection: GLOBAL_COLLECTION,
+      id: args.slug,
+    });
+
+    if (!record) {
+      return null;
+    }
+
+    return {
+      createdAt: record.createdAt,
+      data: record.data,
+      slug: args.slug,
+      updatedAt: record.updatedAt,
+    };
+  }
+
   async recordAudit(entry: AuditEntry): Promise<void> {
     this.audits.push(entry);
   }
@@ -104,6 +125,54 @@ export class MemoryAdapter implements DatabaseAdapter {
     };
     bucket.set(args.id, next);
     return next;
+  }
+
+  async updateGlobal(args: {
+    data: Record<string, unknown>;
+    slug: string;
+  }): Promise<OboeGlobalRecord> {
+    const existing = await this.findGlobal({
+      slug: args.slug,
+    });
+
+    if (!existing) {
+      const created = await this.create({
+        collection: GLOBAL_COLLECTION,
+        data: args.data,
+      });
+      const bucket = this.store.get(GLOBAL_COLLECTION);
+      if (bucket) {
+        bucket.delete(created.id);
+        bucket.set(args.slug, {
+          ...created,
+          id: args.slug,
+        });
+      }
+
+      return {
+        createdAt: created.createdAt,
+        data: args.data,
+        slug: args.slug,
+        updatedAt: created.updatedAt,
+      };
+    }
+
+    const updated = await this.update({
+      collection: GLOBAL_COLLECTION,
+      data: args.data,
+      id: args.slug,
+    });
+
+    if (!updated) {
+      throw new Error(`Failed to update global "${args.slug}".`);
+    }
+
+    return {
+      createdAt: updated.createdAt,
+      data: updated.data,
+      slug: args.slug,
+      updatedAt: updated.updatedAt,
+    };
   }
 }
 

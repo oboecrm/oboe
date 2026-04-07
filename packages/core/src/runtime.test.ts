@@ -84,7 +84,7 @@ describe("createOboeRuntime", () => {
     ]);
   });
 
-  it("shares Local API behavior across hooks, events, and jobs", async () => {
+  it("shares Local API behavior across collection hooks, events, and jobs", async () => {
     const adapter = createMemoryAdapter();
     const runtime = createOboeRuntime({
       config: defineConfig({
@@ -124,7 +124,7 @@ describe("createOboeRuntime", () => {
                       },
                     }),
                   ],
-                  beforeChange: [
+                  beforeValidate: [
                     async ({ data }) => ({
                       ...data,
                       stage: data.stage ?? "new",
@@ -248,7 +248,7 @@ describe("createOboeRuntime", () => {
     });
   });
 
-  it("runs beforeChange hooks before built-in validation", async () => {
+  it("runs beforeValidate hooks before built-in validation", async () => {
     const runtime = createOboeRuntime({
       config: defineConfig({
         modules: [
@@ -263,7 +263,7 @@ describe("createOboeRuntime", () => {
                   },
                 ],
                 hooks: {
-                  beforeChange: [
+                  beforeValidate: [
                     ({ data }) => ({
                       ...data,
                       value:
@@ -291,6 +291,307 @@ describe("createOboeRuntime", () => {
     });
 
     expect(created.value).toBe(42);
+  });
+
+  it("runs collection and field hooks in the expected order", async () => {
+    const order: string[] = [];
+    const runtime = createOboeRuntime({
+      config: defineConfig({
+        modules: [
+          defineModule({
+            collections: [
+              {
+                fields: [
+                  {
+                    hooks: {
+                      afterChange: [
+                        async ({ value }) => {
+                          order.push("field.afterChange");
+                          return `${String(value)}-saved`;
+                        },
+                      ],
+                      afterRead: [
+                        async ({ value }) => {
+                          order.push("field.afterRead");
+                          return `${String(value)}-read`;
+                        },
+                      ],
+                      beforeChange: [
+                        async ({ value }) => {
+                          order.push("field.beforeChange");
+                          return `${String(value)}-prepared`;
+                        },
+                      ],
+                      beforeValidate: [
+                        async ({ value }) => {
+                          order.push("field.beforeValidate");
+                          return String(value).trim();
+                        },
+                      ],
+                    },
+                    name: "title",
+                    type: "text",
+                  },
+                ],
+                hooks: {
+                  afterChange: [
+                    async ({ doc }) => {
+                      order.push("collection.afterChange");
+                      return doc;
+                    },
+                  ],
+                  afterOperation: [
+                    async ({ result }) => {
+                      order.push("collection.afterOperation");
+                      return result;
+                    },
+                  ],
+                  afterRead: [
+                    async ({ doc }) => {
+                      order.push("collection.afterRead");
+                      return doc;
+                    },
+                  ],
+                  beforeChange: [
+                    async ({ data }) => {
+                      order.push("collection.beforeChange");
+                      return data;
+                    },
+                  ],
+                  beforeOperation: [
+                    async () => {
+                      order.push("collection.beforeOperation");
+                    },
+                  ],
+                  beforeRead: [
+                    async ({ doc }) => {
+                      order.push("collection.beforeRead");
+                      return doc;
+                    },
+                  ],
+                  beforeValidate: [
+                    async ({ data }) => {
+                      order.push("collection.beforeValidate");
+                      return data;
+                    },
+                  ],
+                },
+                slug: "posts",
+              },
+            ],
+            slug: "content",
+          }),
+        ],
+      }),
+      db: createMemoryAdapter(),
+    });
+
+    const created = await runtime.create({
+      collection: "posts",
+      data: {
+        title: "  hello  ",
+      },
+    });
+
+    expect(created.title).toBe("hello-prepared-saved-read");
+    expect(order).toEqual([
+      "collection.beforeOperation",
+      "collection.beforeValidate",
+      "field.beforeValidate",
+      "collection.beforeChange",
+      "field.beforeChange",
+      "field.afterChange",
+      "collection.afterChange",
+      "collection.beforeRead",
+      "field.afterRead",
+      "collection.afterRead",
+      "collection.afterOperation",
+    ]);
+  });
+
+  it("reuses shared hook context across nested runtime calls on the same request", async () => {
+    const request = new Request("https://example.com/api/posts");
+    const seen: string[] = [];
+    const runtime = createOboeRuntime({
+      config: defineConfig({
+        modules: [
+          defineModule({
+            collections: [
+              {
+                fields: [{ name: "name", type: "text" }],
+                hooks: {
+                  beforeOperation: [
+                    async ({ context, req, oboe, operation }) => {
+                      context.trace = ["companies.beforeOperation"];
+                      seen.push(String((context.trace as string[])[0]));
+                      if (operation === "create" && req) {
+                        await oboe.create({
+                          collection: "contacts",
+                          data: { name: "Nested" },
+                          req,
+                        });
+                      }
+                    },
+                  ],
+                },
+                slug: "companies",
+              },
+              {
+                fields: [
+                  {
+                    hooks: {
+                      beforeValidate: [
+                        async ({ context, value }) => {
+                          seen.push(
+                            `${(context.trace as string[] | undefined)?.[0] ?? "missing"}:${String(value)}`
+                          );
+                          return value;
+                        },
+                      ],
+                    },
+                    name: "name",
+                    type: "text",
+                  },
+                ],
+                slug: "contacts",
+              },
+            ],
+            slug: "crm",
+          }),
+        ],
+      }),
+      db: createMemoryAdapter(),
+    });
+
+    await runtime.create({
+      collection: "companies",
+      data: {
+        name: "Acme",
+      },
+      req: request,
+    });
+
+    expect(seen).toContain("companies.beforeOperation");
+    expect(seen).toContain("companies.beforeOperation:Nested");
+  });
+
+  it("runs global hooks and field hooks for singleton globals", async () => {
+    const order: string[] = [];
+    const runtime = createOboeRuntime({
+      config: defineConfig({
+        modules: [
+          defineModule({
+            collections: [],
+            globals: [
+              {
+                fields: [
+                  {
+                    hooks: {
+                      afterRead: [
+                        async ({ value }) => {
+                          order.push("field.afterRead");
+                          return `${String(value)}-read`;
+                        },
+                      ],
+                      beforeChange: [
+                        async ({ value }) => {
+                          order.push("field.beforeChange");
+                          return String(value).trim();
+                        },
+                      ],
+                      beforeValidate: [
+                        async ({ value }) => {
+                          order.push("field.beforeValidate");
+                          return String(value).toUpperCase();
+                        },
+                      ],
+                    },
+                    name: "siteName",
+                    type: "text",
+                  },
+                ],
+                hooks: {
+                  afterChange: [
+                    async ({ doc }) => {
+                      order.push("global.afterChange");
+                      return doc;
+                    },
+                  ],
+                  afterOperation: [
+                    async ({ result }) => {
+                      order.push("global.afterOperation");
+                      return result;
+                    },
+                  ],
+                  afterRead: [
+                    async ({ doc }) => {
+                      order.push("global.afterRead");
+                      return doc;
+                    },
+                  ],
+                  beforeChange: [
+                    async ({ data }) => {
+                      order.push("global.beforeChange");
+                      return data;
+                    },
+                  ],
+                  beforeOperation: [
+                    async () => {
+                      order.push("global.beforeOperation");
+                    },
+                  ],
+                  beforeRead: [
+                    async ({ doc }) => {
+                      order.push("global.beforeRead");
+                      return doc;
+                    },
+                  ],
+                  beforeValidate: [
+                    async ({ data }) => {
+                      order.push("global.beforeValidate");
+                      return data;
+                    },
+                  ],
+                },
+                slug: "site-settings",
+              },
+            ],
+            slug: "settings",
+          }),
+        ],
+      }),
+      db: createMemoryAdapter(),
+    });
+
+    const updated = await runtime.updateGlobal({
+      data: {
+        siteName: " oboe ",
+      },
+      slug: "site-settings",
+    });
+    const loaded = await runtime.findGlobal({
+      slug: "site-settings",
+    });
+
+    expect(updated.siteName).toBe("OBOE-read");
+    expect(loaded?.siteName).toBe("OBOE-read");
+    expect(order).toEqual([
+      "global.beforeOperation",
+      "global.beforeValidate",
+      "field.beforeValidate",
+      "global.beforeChange",
+      "field.beforeChange",
+      "global.afterChange",
+      "global.beforeRead",
+      "field.afterRead",
+      "global.afterRead",
+      "global.afterOperation",
+      "global.beforeOperation",
+      "global.beforeRead",
+      "field.afterRead",
+      "global.afterRead",
+      "global.afterOperation",
+    ]);
   });
 
   it("rejects invalid built-in field values and validates merged update state", async () => {
@@ -872,8 +1173,14 @@ describe("createOboeRuntime", () => {
         async findById() {
           return null;
         },
+        async findGlobal() {
+          return null;
+        },
         async update() {
           return null;
+        },
+        async updateGlobal() {
+          throw new Error("not implemented");
         },
       },
     });
@@ -964,6 +1271,9 @@ describe("createOboeRuntime", () => {
       async findById(args: { collection: string; id: string }) {
         return failingAdapter.findById(args);
       },
+      async findGlobal(args: { slug: string }) {
+        return failingAdapter.findGlobal(args);
+      },
       async recordAudit(entry: AuditEntry) {
         return failingAdapter.recordAudit(entry);
       },
@@ -973,6 +1283,12 @@ describe("createOboeRuntime", () => {
         id: string;
       }): Promise<OboeRecord | null> {
         throw new Error("update failed");
+      },
+      async updateGlobal(args: {
+        data: Record<string, unknown>;
+        slug: string;
+      }) {
+        return failingAdapter.updateGlobal(args);
       },
     };
     const updateFailureRuntime = createOboeRuntime({
