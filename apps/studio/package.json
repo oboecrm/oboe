@@ -5,7 +5,7 @@
   "scripts": {
     "build": "pnpm generate:types && next build",
     "dev": "pnpm generate:types && next dev",
-    "generate:types": "oboe generate:types --config ./oboe.config.ts",
+    "generate:types": "pnpm exec oboe generate:types --config ./oboe.config.ts",
     "lint": "pnpm generate:types && tsc -p tsconfig.json --noEmit",
     "typecheck": "pnpm generate:types && tsc -p tsconfig.json --noEmit"
   },
