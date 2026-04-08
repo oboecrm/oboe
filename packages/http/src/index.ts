@@ -642,6 +642,19 @@ export function createHttpHandler(options: HttpHandlerOptions) {
   return async function handle(request: Request) {
     try {
       const url = new URL(request.url);
+
+      const customRoute = options.runtime.config.http?.routes?.find(
+        (route: { method: string; path: string }) => {
+          return route.method === request.method && route.path === url.pathname;
+        }
+      );
+
+      if (customRoute) {
+        return await customRoute.handler(request, {
+          runtime: options.runtime,
+        });
+      }
+
       const segments = normalizeSegments(url, basePath);
       const [first, second] = segments;
       const query = parseCollectionQuery(url);

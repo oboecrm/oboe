@@ -163,6 +163,46 @@ describe("createHttpHandler", () => {
     expect(openApiPayload.paths["/api/contacts"]).toBeDefined();
   });
 
+  it("runs custom HTTP routes before built-in REST handling", async () => {
+    const runtime = createOboeRuntime({
+      config: defineConfig({
+        http: {
+          routes: [
+            {
+              async handler() {
+                return new Response("custom-ok", {
+                  status: 202,
+                });
+              },
+              method: "GET",
+              path: "/api/contacts",
+            },
+          ],
+        },
+        modules: [
+          defineModule({
+            collections: [
+              {
+                fields: [{ name: "name", type: "text" }],
+                slug: "contacts",
+              },
+            ],
+            slug: "crm",
+          }),
+        ],
+      }),
+      db: createMemoryAdapter(),
+    });
+    const handler = createHttpHandler({ runtime });
+
+    const response = await handler(
+      new Request("http://localhost/api/contacts")
+    );
+
+    expect(response.status).toBe(202);
+    expect(await response.text()).toBe("custom-ok");
+  });
+
   it("accepts multipart uploads for upload collections and proxies file downloads", async () => {
     const runtime = createOboeRuntime({
       config: defineConfig({

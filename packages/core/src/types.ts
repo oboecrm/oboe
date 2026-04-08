@@ -595,6 +595,23 @@ export interface PluginConfig {
   name: string;
 }
 
+export interface HttpRouteContext {
+  runtime: OboeRuntime;
+}
+
+export interface HttpRouteConfig {
+  handler: (
+    request: Request,
+    context: HttpRouteContext
+  ) => Promise<Response> | Response;
+  method: "DELETE" | "GET" | "PATCH" | "POST" | "PUT";
+  path: string;
+}
+
+export interface HttpConfig {
+  routes?: HttpRouteConfig[];
+}
+
 export interface AdminConfig {
   actions?: Record<string, AdminActionConfig>;
   components?: Record<string, ComponentReference>;
@@ -653,6 +670,7 @@ export interface OboeConfig {
   auth?: AuthConfig;
   email?: EmailAdapter | Promise<EmailAdapter>;
   graphQL?: GraphQLConfig;
+  http?: HttpConfig;
   jobs?: JobsConfig;
   modules: ModuleConfig[];
   plugins?: PluginConfig[];
