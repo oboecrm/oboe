@@ -6,8 +6,15 @@
   "tasks": {
     "build": {
       "dependsOn": ["^build"],
-      "inputs": ["$TURBO_DEFAULT$", "src/**", "app/**", "oboe.config.ts"],
-      "outputs": ["dist/**", ".next/**"]
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "src/**",
+        "app/**",
+        "components/**",
+        "oboe.config.ts",
+        "oboe-types.generated.ts"
+      ],
+      "outputs": ["dist/**", ".next/**", "oboe-types.generated.ts"]
     },
     "dev": {
       "cache": false,
@@ -21,7 +28,8 @@
       "outputs": []
     },
     "typecheck": {
-      "dependsOn": ["^build"]
+      "dependsOn": ["^build"],
+      "inputs": ["$TURBO_DEFAULT$", "oboe.config.ts", "oboe-types.generated.ts"]
     }
   }
 }

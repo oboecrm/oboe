@@ -2,7 +2,7 @@
 import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { compileSchema } from "@oboe/core";
+import { compileSchema, type OboeConfig } from "@oboe/core";
 import { mySqlDialect } from "@oboe/db-mysql";
 import { postgresDialect } from "@oboe/db-postgres";
 import { sqliteDialect } from "@oboe/db-sqlite";
@@ -22,11 +22,16 @@ import mysql from "mysql2/promise";
 import { Pool } from "pg";
 import { tsImport } from "tsx/esm/api";
 
+import {
+  generateTypesSource,
+  resolveTypesOutputPath,
+} from "./generate-types.js";
+
 type DialectName = "mysql" | "postgres" | "sqlite";
 
 interface CliOptions {
   config: string;
-  dialect: DialectName;
+  dialect?: DialectName;
   file?: string;
   name?: string;
   url?: string;
@@ -64,7 +69,11 @@ async function loadConfig(configPath: string) {
     pathToFileURL(resolvedPath).href,
     import.meta.url
   );
-  return module.default;
+
+  return {
+    config: (module.default?.default ?? module.default) as OboeConfig,
+    resolvedPath,
+  };
 }
 
 function getDialect(name: DialectName): RelationalDialect {
@@ -76,6 +85,17 @@ function getDialect(name: DialectName): RelationalDialect {
     case "sqlite":
       return sqliteDialect;
   }
+}
+
+function requireDialect(
+  options: CliOptions,
+  command: "db:push" | "migrate" | "migrate:generate" | "migrate:status"
+) {
+  if (!options.dialect) {
+    throw new Error(`The "${command}" command requires --dialect.`);
+  }
+
+  return options.dialect;
 }
 
 function getMigrationDir(dialect: DialectName) {
@@ -287,26 +307,27 @@ async function createQueryable(options: CliOptions): Promise<{
 }
 
 async function commandGenerate(options: CliOptions) {
-  const config = await loadConfig(options.config);
+  const dialectName = requireDialect(options, "migrate:generate");
+  const { config } = await loadConfig(options.config);
   const schema = compileSchema(config);
   const id = `${new Date()
     .toISOString()
     .replace(/[-:TZ.]/g, "")
     .slice(0, 14)}_${options.name ?? "bootstrap"}`;
   const generated = createGeneratedMigration({
-    dialect: options.dialect,
+    dialect: dialectName,
     id,
     name: options.name ?? "bootstrap",
     schema,
   });
-  const dialect = getDialect(options.dialect);
-  const directory = getMigrationDir(options.dialect);
-  const existing = await listGeneratedMigrations(options.dialect);
+  const dialect = getDialect(dialectName);
+  const directory = getMigrationDir(dialectName);
+  const existing = await listGeneratedMigrations(dialectName);
   const latest = existing[existing.length - 1];
 
   if (latest && latest.manifest.checksum === generated.manifest.checksum) {
     console.log(
-      `No migration generated. ${options.dialect} manifest is unchanged.`
+      `No migration generated. ${dialectName} manifest is unchanged.`
     );
     return;
   }
@@ -324,7 +345,7 @@ async function commandGenerate(options: CliOptions) {
     path.join(directory, `${id}.json`),
     JSON.stringify(
       {
-        dialect: options.dialect,
+        dialect: dialectName,
         id,
         manifest: generated.manifest,
         name: options.name ?? "bootstrap",
@@ -335,13 +356,14 @@ async function commandGenerate(options: CliOptions) {
     "utf8"
   );
 
-  console.log(`Generated ${options.dialect} migration ${id}.`);
+  console.log(`Generated ${dialectName} migration ${id}.`);
 }
 
 async function commandMigrate(options: CliOptions) {
-  const generated = await listGeneratedMigrations(options.dialect);
+  const dialectName = requireDialect(options, "migrate");
+  const generated = await listGeneratedMigrations(dialectName);
   const { close, queryable } = await createQueryable(options);
-  const dialect = getDialect(options.dialect);
+  const dialect = getDialect(dialectName);
   const migrator = new RelationalMigrator(dialect, queryable);
 
   try {
@@ -355,7 +377,7 @@ async function commandMigrate(options: CliOptions) {
       applied,
       generated,
     });
-    const directory = getMigrationDir(options.dialect);
+    const directory = getMigrationDir(dialectName);
 
     const apply = async (tx: RelationalQueryable) => {
       for (const migration of pending) {
@@ -386,19 +408,20 @@ async function commandMigrate(options: CliOptions) {
       await apply(queryable);
     }
 
-    console.log(`Applied ${pending.length} ${options.dialect} migration(s).`);
+    console.log(`Applied ${pending.length} ${dialectName} migration(s).`);
   } finally {
     await close();
   }
 }
 
 async function commandStatus(options: CliOptions) {
-  const config = await loadConfig(options.config);
+  const dialectName = requireDialect(options, "migrate:status");
+  const { config } = await loadConfig(options.config);
   const schema = compileSchema(config);
-  const generated = await listGeneratedMigrations(options.dialect);
+  const generated = await listGeneratedMigrations(dialectName);
   const latest = generated[generated.length - 1];
   const { close, queryable } = await createQueryable(options);
-  const dialect = getDialect(options.dialect);
+  const dialect = getDialect(dialectName);
   const migrator = new RelationalMigrator(dialect, queryable);
 
   try {
@@ -430,10 +453,11 @@ async function commandStatus(options: CliOptions) {
 }
 
 async function commandPush(options: CliOptions) {
-  const config = await loadConfig(options.config);
+  const dialectName = requireDialect(options, "db:push");
+  const { config } = await loadConfig(options.config);
   const schema = compileSchema(config);
   const manifest = createRelationalManifest(schema);
-  const dialect = getDialect(options.dialect);
+  const dialect = getDialect(dialectName);
   const { close, queryable } = await createQueryable(options);
 
   try {
@@ -445,7 +469,7 @@ async function commandPush(options: CliOptions) {
       await tx.query(
         dialect.buildInsertAppliedMigrationStatement({
           appliedAt: new Date().toISOString(),
-          dialect: options.dialect,
+          dialect: dialectName,
           id: `push_${manifest.checksum.slice(0, 12)}`,
           manifest,
           name: "db-push",
@@ -465,16 +489,33 @@ async function commandPush(options: CliOptions) {
   }
 }
 
+async function commandGenerateTypes(options: CliOptions) {
+  const { config, resolvedPath } = await loadConfig(options.config);
+  const outputPath = resolveTypesOutputPath({
+    config,
+    configPath: resolvedPath,
+  });
+  const source = generateTypesSource(config);
+
+  await writeFile(outputPath, source, "utf8");
+  console.log(
+    `Generated TypeScript types at ${path.relative(process.cwd(), outputPath)}.`
+  );
+}
+
 async function main() {
   const { command, options } = parseArgs(process.argv.slice(2));
 
-  if (!command || !options.dialect) {
+  if (!command) {
     throw new Error(
-      "Usage: oboe <migrate:generate|migrate|migrate:status|db:push> --dialect <postgres|mysql|sqlite> [--config oboe.config.ts] [--url ...] [--file ...]"
+      "Usage: oboe <generate:types|migrate:generate|migrate|migrate:status|db:push> [--config oboe.config.ts] [--dialect <postgres|mysql|sqlite>] [--url ...] [--file ...]"
     );
   }
 
   switch (command) {
+    case "generate:types":
+      await commandGenerateTypes(options);
+      return;
     case "migrate:generate":
       await commandGenerate(options);
       return;

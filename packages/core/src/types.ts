@@ -302,8 +302,15 @@ export interface CollectionStorageConfig {
   serveMode?: StorageServeMode;
 }
 
+export interface RawComponentReference {
+  exportName?: string;
+  path: string;
+}
+
+export type ComponentReference = RawComponentReference | string;
+
 export interface AdminViewConfig {
-  component: string;
+  component: ComponentReference;
   label: string;
   path: string;
 }
@@ -590,7 +597,7 @@ export interface PluginConfig {
 
 export interface AdminConfig {
   actions?: Record<string, AdminActionConfig>;
-  components?: Record<string, string>;
+  components?: Record<string, ComponentReference>;
   views?: Record<string, AdminViewConfig>;
 }
 
@@ -600,6 +607,12 @@ export interface AuthConfig {
 
 export interface JobsConfig {
   retryLimit?: number;
+}
+
+export interface TypeScriptConfig {
+  autoGenerate?: boolean;
+  declare?: boolean;
+  outputFile?: string;
 }
 
 export interface GraphQLConfig {
@@ -644,6 +657,7 @@ export interface OboeConfig {
   modules: ModuleConfig[];
   plugins?: PluginConfig[];
   serverFunctions?: Record<string, ServerFunctionConfig>;
+  typescript?: TypeScriptConfig;
 }
 
 export interface CompiledCollection extends CollectionConfig {
@@ -744,6 +758,82 @@ export interface CountResult {
   totalDocs: number;
 }
 
+export interface BaseGeneratedTypes {
+  collectionInputs: Record<string, Record<string, unknown>>;
+  collections: Record<string, OboeDocument>;
+  globalInputs: Record<string, Record<string, unknown>>;
+  globals: Record<string, OboeGlobalDocument>;
+}
+
+// biome-ignore lint/suspicious/noEmptyInterface: declaration merging anchor for generated types
+export interface GeneratedTypes {}
+
+type GeneratedCollections<TGeneratedTypes extends Partial<BaseGeneratedTypes>> =
+  TGeneratedTypes extends {
+    collections: infer TCollections;
+  }
+    ? TCollections extends object
+      ? TCollections
+      : Record<string, OboeDocument>
+    : Record<string, OboeDocument>;
+
+type GeneratedCollectionInputs<
+  TGeneratedTypes extends Partial<BaseGeneratedTypes>,
+> = TGeneratedTypes extends {
+  collectionInputs: infer TInputs;
+}
+  ? TInputs extends object
+    ? TInputs
+    : Record<string, Record<string, unknown>>
+  : Record<string, Record<string, unknown>>;
+
+type GeneratedGlobals<TGeneratedTypes extends Partial<BaseGeneratedTypes>> =
+  TGeneratedTypes extends {
+    globals: infer TGlobals;
+  }
+    ? TGlobals extends object
+      ? TGlobals
+      : Record<string, OboeGlobalDocument>
+    : Record<string, OboeGlobalDocument>;
+
+type GeneratedGlobalInputs<
+  TGeneratedTypes extends Partial<BaseGeneratedTypes>,
+> = TGeneratedTypes extends {
+  globalInputs: infer TInputs;
+}
+  ? TInputs extends object
+    ? TInputs
+    : Record<string, Record<string, unknown>>
+  : Record<string, Record<string, unknown>>;
+
+export type CollectionDocumentForSlug<
+  TGeneratedTypes extends Partial<BaseGeneratedTypes>,
+  TSlug extends string,
+> = TSlug extends keyof GeneratedCollections<TGeneratedTypes>
+  ? GeneratedCollections<TGeneratedTypes>[TSlug]
+  : OboeDocument;
+
+export type CollectionInputForSlug<
+  TGeneratedTypes extends Partial<BaseGeneratedTypes>,
+  TSlug extends string,
+> = TSlug extends keyof GeneratedCollectionInputs<TGeneratedTypes>
+  ? GeneratedCollectionInputs<TGeneratedTypes>[TSlug]
+  : Record<string, unknown>;
+
+export type GlobalDocumentForSlug<
+  TGeneratedTypes extends Partial<BaseGeneratedTypes>,
+  TSlug extends string,
+> = TSlug extends keyof GeneratedGlobals<TGeneratedTypes>
+  ? GeneratedGlobals<TGeneratedTypes>[TSlug]
+  : OboeGlobalDocument;
+
+export type GlobalInputForSlug<
+  TGeneratedTypes extends Partial<BaseGeneratedTypes>,
+  TSlug extends string,
+> = TSlug extends keyof GeneratedGlobalInputs<TGeneratedTypes>
+  ? GeneratedGlobalInputs<TGeneratedTypes>[TSlug]
+  : Record<string, unknown>;
+
 export interface AuditEntry {
   actor?: unknown;
   at: string;
@@ -815,7 +905,9 @@ export interface DatabaseAdapter {
   }) => Promise<OboeGlobalRecord>;
 }
 
-export interface OboeRuntime {
+export interface OboeRuntime<
+  TGeneratedTypes extends Partial<BaseGeneratedTypes> = GeneratedTypes,
+> {
   auth: {
     collection: () => string | undefined;
   };
@@ -829,33 +921,33 @@ export interface OboeRuntime {
     user?: unknown;
   }) => Promise<TOutput>;
   config: OboeConfig;
-  count: (args: {
-    collection: string;
+  count: <TSlug extends string>(args: {
+    collection: TSlug;
     overrideAccess?: boolean;
     query?: Pick<CollectionQuery, "where">;
     req?: Request;
     user?: unknown;
   }) => Promise<CountResult>;
-  create: (args: {
-    collection: string;
-    data: Record<string, unknown>;
+  create: <TSlug extends string>(args: {
+    collection: TSlug;
+    data: CollectionInputForSlug<TGeneratedTypes, TSlug>;
     depth?: number;
     file?: UploadInputFile;
     overrideAccess?: boolean;
     req?: Request;
     select?: SelectShape;
     user?: unknown;
-  }) => Promise<OboeDocument>;
+  }) => Promise<CollectionDocumentForSlug<TGeneratedTypes, TSlug>>;
   db: DatabaseAdapter;
-  delete: (args: {
-    collection: string;
+  delete: <TSlug extends string>(args: {
+    collection: TSlug;
     depth?: number;
     id: string;
     overrideAccess?: boolean;
     req?: Request;
     select?: SelectShape;
     user?: unknown;
-  }) => Promise<OboeDocument | null>;
+  }) => Promise<CollectionDocumentForSlug<TGeneratedTypes, TSlug> | null>;
   downloadFile: (args: {
     collection: string;
     id: string;
@@ -867,36 +959,36 @@ export interface OboeRuntime {
     getClient: <T = unknown>(name: string) => T | undefined;
   };
   events: EventBus;
-  find: (args: {
-    collection: string;
+  find: <TSlug extends string>(args: {
+    collection: TSlug;
     overrideAccess?: boolean;
     query?: CollectionQuery;
     req?: Request;
     user?: unknown;
-  }) => Promise<FindResult>;
-  findById: (args: {
-    collection: string;
+  }) => Promise<FindResult<CollectionDocumentForSlug<TGeneratedTypes, TSlug>>>;
+  findById: <TSlug extends string>(args: {
+    collection: TSlug;
     depth?: number;
     id: string;
     overrideAccess?: boolean;
     req?: Request;
     select?: SelectShape;
     user?: unknown;
-  }) => Promise<OboeDocument | null>;
-  findGlobal: (args: {
+  }) => Promise<CollectionDocumentForSlug<TGeneratedTypes, TSlug> | null>;
+  findGlobal: <TSlug extends string>(args: {
     req?: Request;
-    slug: string;
+    slug: TSlug;
     user?: unknown;
-  }) => Promise<OboeGlobalDocument | null>;
+  }) => Promise<GlobalDocumentForSlug<TGeneratedTypes, TSlug> | null>;
   graphql: GraphQLExecutor;
   initialize: () => Promise<void>;
   jobs: JobDispatcher;
   schema: CompiledSchema;
   sendEmail: (message: SendEmailOptions) => Promise<unknown>;
   setGraphQLExecutor: (executor: GraphQLExecutor) => void;
-  update: (args: {
-    collection: string;
-    data: Record<string, unknown>;
+  update: <TSlug extends string>(args: {
+    collection: TSlug;
+    data: Partial<CollectionInputForSlug<TGeneratedTypes, TSlug>>;
     depth?: number;
     file?: UploadInputFile;
     id: string;
@@ -904,13 +996,13 @@ export interface OboeRuntime {
     req?: Request;
     select?: SelectShape;
     user?: unknown;
-  }) => Promise<OboeDocument | null>;
-  updateGlobal: (args: {
-    data: Record<string, unknown>;
+  }) => Promise<CollectionDocumentForSlug<TGeneratedTypes, TSlug> | null>;
+  updateGlobal: <TSlug extends string>(args: {
+    data: GlobalInputForSlug<TGeneratedTypes, TSlug>;
     req?: Request;
-    slug: string;
+    slug: TSlug;
     user?: unknown;
-  }) => Promise<OboeGlobalDocument>;
+  }) => Promise<GlobalDocumentForSlug<TGeneratedTypes, TSlug>>;
 }
 
 export type CollectionOperation = "create" | "delete" | "read" | "update";

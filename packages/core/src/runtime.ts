@@ -1,3 +1,4 @@
+import { resolveConfig } from "./config.js";
 import { createEventBus } from "./events.js";
 import {
   applySelect,
@@ -13,7 +14,9 @@ import {
 } from "./schema.js";
 import type {
   CollectionConfig,
+  CollectionDocumentForSlug,
   CollectionHookArgsBase,
+  CollectionInputForSlug,
   CollectionQuery,
   CollectionValidationContext,
   CountResult,
@@ -21,7 +24,10 @@ import type {
   EventBus,
   FieldConfig,
   FieldValidationContext,
+  GeneratedTypes,
   GlobalConfig,
+  GlobalDocumentForSlug,
+  GlobalInputForSlug,
   GlobalOperation,
   GlobalSchema,
   GlobalValidationContext,
@@ -1941,7 +1947,8 @@ export function createOboeRuntime(args: {
   events?: EventBus;
   jobs?: JobDispatcher;
 }): OboeRuntime {
-  const schema = compileSchema(args.config);
+  const resolvedConfig = resolveConfig(args.config);
+  const schema = compileSchema(resolvedConfig);
   const events = args.events ?? createEventBus();
   const fallbackJobs = args.jobs ?? {
     async enqueue(_job: JobRequest) {
@@ -2097,7 +2104,9 @@ export function createOboeRuntime(args: {
     }
 
     emailAdapterPromise = (async () => {
-      const adapterFactory = args.config.email ? await args.config.email : null;
+      const adapterFactory = resolvedConfig.email
+        ? await resolvedConfig.email
+        : null;
 
       emailAdapter = adapterFactory ? adapterFactory({ oboe: runtime }) : null;
 
@@ -2127,7 +2136,7 @@ export function createOboeRuntime(args: {
       user?: unknown;
     }) {
       const { input, name, req, user } = callArgs;
-      const definition = args.config.serverFunctions?.[name];
+      const definition = resolvedConfig.serverFunctions?.[name];
 
       if (!definition) {
         throw new Error(`Unknown server function "${name}".`);
@@ -2140,8 +2149,15 @@ export function createOboeRuntime(args: {
         user,
       })) as TOutput;
     },
-    config: args.config,
-    async count({ collection, overrideAccess, query, req, user }) {
+    config: resolvedConfig,
+    async count<TSlug extends string>(callArgs: {
+      collection: TSlug;
+      overrideAccess?: boolean;
+      query?: Pick<CollectionQuery, "where">;
+      req?: Request;
+      user?: unknown;
+    }) {
+      const { collection, overrideAccess, query, req, user } = callArgs;
       const collectionConfig = getCompiledCollection(schema, collection);
 
       if (
@@ -2162,16 +2178,26 @@ export function createOboeRuntime(args: {
 
       return countRecords(filterRecords(records, { where: query?.where }));
     },
-    async create({
-      collection,
-      data,
-      depth,
-      file,
-      overrideAccess,
-      req,
-      select,
-      user,
-    }) {
+    async create<TSlug extends string>(callArgs: {
+      collection: TSlug;
+      data: CollectionInputForSlug<GeneratedTypes, TSlug>;
+      depth?: number;
+      file?: UploadInputFile;
+      overrideAccess?: boolean;
+      req?: Request;
+      select?: SelectShape;
+      user?: unknown;
+    }): Promise<CollectionDocumentForSlug<GeneratedTypes, TSlug>> {
+      const {
+        collection,
+        data,
+        depth,
+        file,
+        overrideAccess,
+        req,
+        select,
+        user,
+      } = callArgs;
       const collectionConfig = getCompiledCollection(schema, collection);
       const context = getOrCreateHookContext(req);
       const operationArgs: Record<string, unknown> = {
@@ -2302,7 +2328,7 @@ export function createOboeRuntime(args: {
         user,
       });
 
-      return runCollectionAfterOperation({
+      return (await runCollectionAfterOperation({
         collection: collectionConfig,
         context,
         hookArgs: operationArgs,
@@ -2311,10 +2337,20 @@ export function createOboeRuntime(args: {
         req,
         result,
         user,
-      });
+      })) as CollectionDocumentForSlug<GeneratedTypes, TSlug>;
     },
     db: args.db,
-    async delete({ collection, depth, id, overrideAccess, req, select, user }) {
+    async delete<TSlug extends string>(callArgs: {
+      collection: TSlug;
+      depth?: number;
+      id: string;
+      overrideAccess?: boolean;
+      req?: Request;
+      select?: SelectShape;
+      user?: unknown;
+    }): Promise<CollectionDocumentForSlug<GeneratedTypes, TSlug> | null> {
+      const { collection, depth, id, overrideAccess, req, select, user } =
+        callArgs;
       const collectionConfig = getCompiledCollection(schema, collection);
       const context = getOrCreateHookContext(req);
       const operationArgs: Record<string, unknown> = {
@@ -2425,7 +2461,7 @@ export function createOboeRuntime(args: {
           })
         : null;
 
-      return runCollectionAfterOperation({
+      return (await runCollectionAfterOperation({
         collection: collectionConfig,
         context,
         hookArgs: operationArgs,
@@ -2434,7 +2470,7 @@ export function createOboeRuntime(args: {
         req,
         result,
         user,
-      });
+      })) as CollectionDocumentForSlug<GeneratedTypes, TSlug> | null;
     },
     email: {
       getClient<T = unknown>(name: string): T | undefined {
@@ -2442,7 +2478,14 @@ export function createOboeRuntime(args: {
       },
     },
     events,
-    async find({ collection, overrideAccess, query, req, user }) {
+    async find<TSlug extends string>(callArgs: {
+      collection: TSlug;
+      overrideAccess?: boolean;
+      query?: CollectionQuery;
+      req?: Request;
+      user?: unknown;
+    }) {
+      const { collection, overrideAccess, query, req, user } = callArgs;
       const collectionConfig = getCompiledCollection(schema, collection);
       const context = getOrCreateHookContext(req);
       const operationArgs: Record<string, unknown> = {
@@ -2478,7 +2521,7 @@ export function createOboeRuntime(args: {
           await args.db.find({
             collection,
           })
-        ).map((record) => cloneRecord(record)),
+        ).map((record: OboeRecord) => cloneRecord(record)),
         query
       );
       const page = paginateDocuments(records, query);
@@ -2505,7 +2548,7 @@ export function createOboeRuntime(args: {
         )
       );
 
-      return runCollectionAfterOperation({
+      return (await runCollectionAfterOperation({
         collection: collectionConfig,
         context,
         hookArgs: operationArgs,
@@ -2517,17 +2560,30 @@ export function createOboeRuntime(args: {
           docs,
         },
         user,
-      });
+      })) as {
+        docs: CollectionDocumentForSlug<GeneratedTypes, TSlug>[];
+        hasNextPage: boolean;
+        hasPrevPage: boolean;
+        limit: number;
+        nextPage: number | null;
+        page: number;
+        pagingCounter: number;
+        prevPage: number | null;
+        totalDocs: number;
+        totalPages: number;
+      };
     },
-    async findById({
-      collection,
-      depth,
-      id,
-      overrideAccess,
-      req,
-      select,
-      user,
-    }) {
+    async findById<TSlug extends string>(callArgs: {
+      collection: TSlug;
+      depth?: number;
+      id: string;
+      overrideAccess?: boolean;
+      req?: Request;
+      select?: SelectShape;
+      user?: unknown;
+    }): Promise<CollectionDocumentForSlug<GeneratedTypes, TSlug> | null> {
+      const { collection, depth, id, overrideAccess, req, select, user } =
+        callArgs;
       const context = getOrCreateHookContext(req);
       const collectionConfig = getCompiledCollection(schema, collection);
       const operationArgs: Record<string, unknown> = {
@@ -2572,7 +2628,7 @@ export function createOboeRuntime(args: {
         user,
       });
 
-      return runCollectionAfterOperation({
+      return (await runCollectionAfterOperation({
         collection: collectionConfig,
         context,
         hookArgs: operationArgs,
@@ -2581,9 +2637,14 @@ export function createOboeRuntime(args: {
         req,
         result,
         user,
-      });
+      })) as CollectionDocumentForSlug<GeneratedTypes, TSlug> | null;
     },
-    async findGlobal({ req, slug, user }) {
+    async findGlobal<TSlug extends string>(callArgs: {
+      req?: Request;
+      slug: TSlug;
+      user?: unknown;
+    }): Promise<GlobalDocumentForSlug<GeneratedTypes, TSlug> | null> {
+      const { req, slug, user } = callArgs;
       const globalConfig = getCompiledGlobal(schema, slug);
       const context = getOrCreateHookContext(req);
       const operationArgs: Record<string, unknown> = {
@@ -2629,7 +2690,7 @@ export function createOboeRuntime(args: {
         user,
       });
 
-      return runGlobalAfterOperation({
+      return (await runGlobalAfterOperation({
         context,
         global: globalConfig,
         hookArgs: operationArgs,
@@ -2638,7 +2699,7 @@ export function createOboeRuntime(args: {
         req,
         result: toPublicGlobalDocument(readable),
         user,
-      });
+      })) as GlobalDocumentForSlug<GeneratedTypes, TSlug> | null;
     },
     graphql,
     async initialize() {
@@ -2676,17 +2737,28 @@ export function createOboeRuntime(args: {
       graphql = executor;
       this.graphql = graphql;
     },
-    async update({
-      collection,
-      data,
-      depth,
-      file,
-      id,
-      overrideAccess,
-      req,
-      select,
-      user,
-    }) {
+    async update<TSlug extends string>(callArgs: {
+      collection: TSlug;
+      data: Partial<CollectionInputForSlug<GeneratedTypes, TSlug>>;
+      depth?: number;
+      file?: UploadInputFile;
+      id: string;
+      overrideAccess?: boolean;
+      req?: Request;
+      select?: SelectShape;
+      user?: unknown;
+    }): Promise<CollectionDocumentForSlug<GeneratedTypes, TSlug> | null> {
+      const {
+        collection,
+        data,
+        depth,
+        file,
+        id,
+        overrideAccess,
+        req,
+        select,
+        user,
+      } = callArgs;
       const collectionConfig = getCompiledCollection(schema, collection);
       const context = getOrCreateHookContext(req);
       const operationArgs: Record<string, unknown> = {
@@ -2845,7 +2917,7 @@ export function createOboeRuntime(args: {
         user,
       });
 
-      return runCollectionAfterOperation({
+      return (await runCollectionAfterOperation({
         collection: collectionConfig,
         context,
         hookArgs: operationArgs,
@@ -2854,9 +2926,15 @@ export function createOboeRuntime(args: {
         req,
         result,
         user,
-      });
+      })) as CollectionDocumentForSlug<GeneratedTypes, TSlug> | null;
     },
-    async updateGlobal({ data, req, slug, user }) {
+    async updateGlobal<TSlug extends string>(callArgs: {
+      data: GlobalInputForSlug<GeneratedTypes, TSlug>;
+      req?: Request;
+      slug: TSlug;
+      user?: unknown;
+    }): Promise<GlobalDocumentForSlug<GeneratedTypes, TSlug>> {
+      const { data, req, slug, user } = callArgs;
       const globalConfig = getCompiledGlobal(schema, slug);
       const context = getOrCreateHookContext(req);
       const operationArgs: Record<string, unknown> = {
@@ -2939,7 +3017,7 @@ export function createOboeRuntime(args: {
         user,
       });
 
-      return runGlobalAfterOperation({
+      return (await runGlobalAfterOperation({
         context,
         global: globalConfig,
         hookArgs: operationArgs,
@@ -2948,7 +3026,7 @@ export function createOboeRuntime(args: {
         req,
         result: toPublicGlobalDocument(readable),
         user,
-      });
+      })) as GlobalDocumentForSlug<GeneratedTypes, TSlug>;
     },
     async downloadFile({ collection, id, overrideAccess, req, user }) {
       const collectionConfig = getCompiledCollection(schema, collection);

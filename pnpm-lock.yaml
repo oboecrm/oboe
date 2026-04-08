@@ -83,6 +83,13 @@ importers:
       react-dom:
         specifier: ^19.2.4
         version: 19.2.4(react@19.2.4)
+    devDependencies:
+      '@oboe/cli':
+        specifier: workspace:*
+        version: link:../../packages/cli
+      '@oboe/typescript-plugin':
+        specifier: workspace:*
+        version: link:../../packages/typescript-plugin
 
   packages/admin-next:
     dependencies:
@@ -290,6 +297,8 @@ importers:
       '@vercel/blob':
         specifier: ^2.0.0
         version: 2.3.3
+
+  packages/typescript-plugin: {}
 
   templates/starter: {}
 

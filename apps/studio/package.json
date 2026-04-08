@@ -3,10 +3,11 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "build": "next build",
-    "dev": "next dev",
-    "lint": "tsc -p tsconfig.json --noEmit",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "build": "pnpm generate:types && next build",
+    "dev": "pnpm generate:types && next dev",
+    "generate:types": "oboe generate:types --config ./oboe.config.ts",
+    "lint": "pnpm generate:types && tsc -p tsconfig.json --noEmit",
+    "typecheck": "pnpm generate:types && tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
     "@oboe/admin-next": "workspace:*",
@@ -24,5 +25,9 @@
     "pg": "^8.13.3",
     "react": "^19.2.4",
     "react-dom": "^19.2.4"
+  },
+  "devDependencies": {
+    "@oboe/cli": "workspace:*",
+    "@oboe/typescript-plugin": "workspace:*"
   }
 }

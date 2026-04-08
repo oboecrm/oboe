@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { defineConfig, defineModule } from "./config.js";
+import { defineConfig, defineModule, resolveConfig } from "./config.js";
 import { compileSchema } from "./schema.js";
 
 describe("defineConfig", () => {
@@ -136,5 +136,50 @@ describe("defineConfig", () => {
     ).toThrow(
       'Collection "media" cannot define storage without enabling upload.'
     );
+  });
+
+  it("resolves plugin extensions and applies TypeScript defaults", () => {
+    const resolved = resolveConfig(
+      defineConfig({
+        modules: [],
+        plugins: [
+          {
+            extendConfig(config) {
+              return {
+                ...config,
+                modules: [
+                  ...config.modules,
+                  defineModule({
+                    collections: [
+                      {
+                        fields: [
+                          {
+                            name: "name",
+                            type: "text",
+                          },
+                        ],
+                        slug: "contacts",
+                      },
+                    ],
+                    slug: "crm",
+                  }),
+                ],
+                typescript: {
+                  autoGenerate: true,
+                },
+              };
+            },
+            name: "test-plugin",
+          },
+        ],
+      })
+    );
+
+    expect(resolved.modules).toHaveLength(1);
+    expect(resolved.typescript).toEqual({
+      autoGenerate: true,
+      declare: true,
+      outputFile: "./oboe-types.generated.ts",
+    });
   });
 });

@@ -29,6 +29,9 @@
     "plugins": [
       {
         "name": "next"
+      },
+      {
+        "name": "@oboe/typescript-plugin"
       }
     ]
   },

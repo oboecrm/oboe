@@ -1,3 +1,4 @@
+import { resolveConfig } from "./config.js";
 import type {
   CompiledCollection,
   CompiledSchema,
@@ -58,6 +59,7 @@ function normalizeServeMode(
 }
 
 export function compileSchema(config: OboeConfig): CompiledSchema {
+  const resolvedConfig = resolveConfig(config);
   const moduleSlugs = new Set<string>();
   const collectionSlugs = new Set<string>();
   const globalSlugs = new Set<string>();
@@ -65,7 +67,7 @@ export function compileSchema(config: OboeConfig): CompiledSchema {
   const collections = new Map<string, CompiledCollection>();
   const globals = new Map<string, GlobalConfig>();
 
-  for (const moduleConfig of config.modules) {
+  for (const moduleConfig of resolvedConfig.modules) {
     assertUnique(moduleConfig.slug, moduleSlugs, "module");
     modules.set(moduleConfig.slug, moduleConfig);
 
@@ -95,7 +97,7 @@ export function compileSchema(config: OboeConfig): CompiledSchema {
         admin: {
           ...collection.admin,
           views: {
-            ...config.admin?.views,
+            ...resolvedConfig.admin?.views,
             ...collection.admin?.views,
           },
         },
@@ -120,7 +122,7 @@ export function compileSchema(config: OboeConfig): CompiledSchema {
 
   return {
     collections,
-    config,
+    config: resolvedConfig,
     globals,
     modules,
   };

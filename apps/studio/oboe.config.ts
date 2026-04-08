@@ -105,12 +105,12 @@ export default defineConfig({
   admin: {
     views: {
       composer: {
-        component: "activity-composer",
+        component: "@oboe/admin-next#ActivityComposer",
         label: "Activity Composer",
         path: "/composer",
       },
       timeline: {
-        component: "timeline-view",
+        component: "@oboe/admin-next#TimelineView",
         label: "Timeline",
         path: "/timeline",
       },
@@ -184,7 +184,7 @@ export default defineConfig({
             titleField: "name",
             views: {
               pipeline: {
-                component: "pipeline-view",
+                component: "@oboe/admin-next#PipelineView",
                 label: "Pipeline",
                 path: "/pipeline",
               },
@@ -320,4 +320,7 @@ export default defineConfig({
     }),
   ],
   plugins: storagePlugin ? [storagePlugin] : [],
+  typescript: {
+    outputFile: "./oboe-types.generated.ts",
+  },
 });
