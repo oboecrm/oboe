@@ -126,7 +126,9 @@ interface JobRow {
   idempotency_key: string | null;
   input: Record<string, unknown> | string;
   last_error: string | null;
-  log: Array<{ createdAt?: string; created_at?: string; message: string }> | string;
+  log:
+    | Array<{ createdAt?: string; created_at?: string; message: string }>
+    | string;
   max_retries: number;
   output: Record<string, unknown> | string | null;
   queue: string;
@@ -150,7 +152,9 @@ function parseObject(
 }
 
 function parseLog(
-  value: Array<{ createdAt?: string; created_at?: string; message: string }> | string
+  value:
+    | Array<{ createdAt?: string; created_at?: string; message: string }>
+    | string
 ) {
   const entries =
     typeof value === "string"
@@ -302,7 +306,10 @@ where id = ?`.trim(),
   }
 
   async claimJobs(args: ClaimJobsArgs): Promise<Job[]> {
-    if (!hasConnectionFactory(this.client) && !hasTransactionMethods(this.client)) {
+    if (
+      !hasConnectionFactory(this.client) &&
+      !hasTransactionMethods(this.client)
+    ) {
       throw new Error("MySQL job claiming requires transaction support.");
     }
 
@@ -421,7 +428,11 @@ set
   status = 'completed',
   updated_at = CURRENT_TIMESTAMP
 where id = ?`.trim(),
-      [JSON.stringify(args.log ?? []), args.output ? JSON.stringify(args.output) : null, args.id]
+      [
+        JSON.stringify(args.log ?? []),
+        args.output ? JSON.stringify(args.output) : null,
+        args.id,
+      ]
     );
 
     return this.findJobById(args.id);
@@ -459,7 +470,8 @@ ${queueClause}`.trim(),
       maxRetries: 0,
       queue: "default",
       task: job.name,
-      waitUntil: job.runAt ?? new Date().toISOString().slice(0, 19).replace("T", " "),
+      waitUntil:
+        job.runAt ?? new Date().toISOString().slice(0, 19).replace("T", " "),
     });
   }
 
@@ -475,7 +487,14 @@ set
   status = case when ? then 'queued' else 'failed' end,
   updated_at = CURRENT_TIMESTAMP
 where id = ?`.trim(),
-      [args.retry ? 1 : 0, args.error, JSON.stringify(args.log ?? []), args.retry ? 1 : 0, args.retry ? 1 : 0, args.id]
+      [
+        args.retry ? 1 : 0,
+        args.error,
+        JSON.stringify(args.log ?? []),
+        args.retry ? 1 : 0,
+        args.retry ? 1 : 0,
+        args.id,
+      ]
     );
 
     return this.findJobById(args.id);

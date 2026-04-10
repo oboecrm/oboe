@@ -678,22 +678,21 @@ export interface TaskConfig<
   TOutput = Record<string, unknown>,
 > {
   concurrency?: TaskConcurrencyConfig<TInput, TSlug>;
-  handler: (
-    context: TaskHandlerContext<TInput, TSlug>
-  ) =>
-    | Promise<{
-        output?: TOutput;
-      } | void>
+  handler: (context: TaskHandlerContext<TInput, TSlug>) =>
+    | Promise<
+        | {
+            output?: TOutput;
+          }
+        | undefined
+      >
     | {
         output?: TOutput;
       }
-    | void;
+    | undefined;
   inputSchema?: FieldConfig[];
   interfaceName?: string;
   label?: string;
-  onFail?: (
-    context: TaskFailureContext<TInput>
-  ) => Promise<void> | void;
+  onFail?: (context: TaskFailureContext<TInput>) => Promise<void> | void;
   onSuccess?: (
     context: TaskSuccessContext<TInput, TOutput>
   ) => Promise<void> | void;
@@ -915,25 +914,23 @@ type GeneratedGlobalInputs<
     : Record<string, Record<string, unknown>>
   : Record<string, Record<string, unknown>>;
 
-type GeneratedTaskInputs<
-  TGeneratedTypes extends Partial<BaseGeneratedTypes>,
-> = TGeneratedTypes extends {
-  taskInputs: infer TInputs;
-}
-  ? TInputs extends object
-    ? TInputs
-    : Record<string, Record<string, unknown>>
-  : Record<string, Record<string, unknown>>;
+type GeneratedTaskInputs<TGeneratedTypes extends Partial<BaseGeneratedTypes>> =
+  TGeneratedTypes extends {
+    taskInputs: infer TInputs;
+  }
+    ? TInputs extends object
+      ? TInputs
+      : Record<string, Record<string, unknown>>
+    : Record<string, Record<string, unknown>>;
 
-type GeneratedTaskOutputs<
-  TGeneratedTypes extends Partial<BaseGeneratedTypes>,
-> = TGeneratedTypes extends {
-  taskOutputs: infer TOutputs;
-}
-  ? TOutputs extends object
-    ? TOutputs
-    : Record<string, Record<string, unknown>>
-  : Record<string, Record<string, unknown>>;
+type GeneratedTaskOutputs<TGeneratedTypes extends Partial<BaseGeneratedTypes>> =
+  TGeneratedTypes extends {
+    taskOutputs: infer TOutputs;
+  }
+    ? TOutputs extends object
+      ? TOutputs
+      : Record<string, Record<string, unknown>>
+    : Record<string, Record<string, unknown>>;
 
 export type CollectionDocumentForSlug<
   TGeneratedTypes extends Partial<BaseGeneratedTypes>,

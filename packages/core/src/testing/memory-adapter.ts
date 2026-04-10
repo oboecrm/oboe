@@ -55,7 +55,8 @@ export class MemoryAdapter implements DatabaseAdapter {
   private sortJobs<TJob extends Job>(jobs: TJob[], order: ProcessingOrder) {
     return [...jobs].sort((left, right) => {
       const delta =
-        new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime();
+        new Date(left.createdAt).getTime() -
+        new Date(right.createdAt).getTime();
       return order === "createdAt" ? delta : -delta;
     });
   }

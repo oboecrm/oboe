@@ -46,6 +46,8 @@ import type {
   OboeRuntime,
   ProcessingOrder,
   QueueJobRequest,
+  RunJobsArgs,
+  RunJobsResult,
   SchemaAdapter,
   SchemaParseFailure,
   SchemaParseResult,
@@ -58,8 +60,6 @@ import type {
   UploadInputFile,
   ValidationIssue,
   ValidationIssueResult,
-  RunJobsArgs,
-  RunJobsResult,
 } from "./types.js";
 import { OboeEmailError, OboeValidationError } from "./types.js";
 import {
@@ -984,7 +984,10 @@ function hasDurableJobSupport(
 }
 
 function getDefaultJobRetries(config: OboeConfig) {
-  return Math.max(0, config.jobs?.defaultRetries ?? config.jobs?.retryLimit ?? 0);
+  return Math.max(
+    0,
+    config.jobs?.defaultRetries ?? config.jobs?.retryLimit ?? 0
+  );
 }
 
 function getProcessingOrderForQueue(args: {
@@ -1081,14 +1084,13 @@ function createJobDispatcher(args: {
       message: entry.message,
     }));
     const id = crypto.randomUUID();
-    const concurrencyKey =
-      task && task.concurrency
-        ? task.concurrency.key({
-            input: request.input,
-            req: request.req,
-            task,
-          })
-        : null;
+    const concurrencyKey = task?.concurrency
+      ? task.concurrency.key({
+          input: request.input,
+          req: request.req,
+          task,
+        })
+      : null;
 
     if (hasDurableJobSupport(args.db)) {
       return args.db.queueJob({

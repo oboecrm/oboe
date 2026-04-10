@@ -158,17 +158,20 @@ export class InMemoryJobRunner implements JobDispatcher {
       waitUntil:
         typeof job.waitUntil === "string"
           ? job.waitUntil
-          : job.waitUntil?.toISOString() ?? now,
+          : (job.waitUntil?.toISOString() ?? now),
     };
     this.queueStore.push(created);
     return created;
   }
 
   async run(_args: RunJobsArgs = {}): Promise<RunJobsResult> {
-    const before = this.queueStore.filter((job) => job.status === "queued").length;
+    const before = this.queueStore.filter(
+      (job) => job.status === "queued"
+    ).length;
     await this.drain();
     return {
-      remaining: this.queueStore.filter((job) => job.status === "queued").length,
+      remaining: this.queueStore.filter((job) => job.status === "queued")
+        .length,
       total: before,
     };
   }

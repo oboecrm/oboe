@@ -115,7 +115,10 @@ const oboeJobOutbox = pgTable(
       table.status,
       table.waitUntil
     ),
-    index("oboe_job_outbox_queue_created_at_idx").on(table.queue, table.createdAt),
+    index("oboe_job_outbox_queue_created_at_idx").on(
+      table.queue,
+      table.createdAt
+    ),
     index("oboe_job_outbox_concurrency_idx").on(table.concurrencyKey),
   ]
 );

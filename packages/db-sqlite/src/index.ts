@@ -117,7 +117,9 @@ interface JobRow {
   idempotency_key: string | null;
   input: Record<string, unknown> | string;
   last_error: string | null;
-  log: Array<{ createdAt?: string; created_at?: string; message: string }> | string;
+  log:
+    | Array<{ createdAt?: string; created_at?: string; message: string }>
+    | string;
   max_retries: number;
   output: Record<string, unknown> | string | null;
   queue: string;
@@ -141,7 +143,9 @@ function parseObject(
 }
 
 function parseLog(
-  value: Array<{ createdAt?: string; created_at?: string; message: string }> | string
+  value:
+    | Array<{ createdAt?: string; created_at?: string; message: string }>
+    | string
 ) {
   const entries =
     typeof value === "string"
@@ -391,7 +395,9 @@ where id = ?`.trim()
           .run(row.id);
       }
 
-      return rows.map((row) => this.findJobById(row.id)).filter(Boolean) as Job[];
+      return rows
+        .map((row) => this.findJobById(row.id))
+        .filter(Boolean) as Job[];
     });
 
     return claim();
@@ -417,7 +423,11 @@ where id = ?`.trim()
       )
       .run(
         JSON.stringify([...existing.log, ...(args.log ?? [])]),
-        args.output ? JSON.stringify(args.output) : existing.output ? JSON.stringify(existing.output) : null,
+        args.output
+          ? JSON.stringify(args.output)
+          : existing.output
+            ? JSON.stringify(existing.output)
+            : null,
         args.id
       );
 

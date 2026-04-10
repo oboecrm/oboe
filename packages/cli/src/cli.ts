@@ -2,13 +2,15 @@
 import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { compileSchema, getOboe, type DatabaseAdapter, type OboeConfig } from "@oboe/core";
-import { createMySqlAdapter } from "@oboe/db-mysql";
-import { mySqlDialect } from "@oboe/db-mysql";
-import { createPostgresAdapter } from "@oboe/db-postgres";
-import { postgresDialect } from "@oboe/db-postgres";
-import { createSqliteAdapter } from "@oboe/db-sqlite";
-import { sqliteDialect } from "@oboe/db-sqlite";
+import {
+  compileSchema,
+  type DatabaseAdapter,
+  getOboe,
+  type OboeConfig,
+} from "@oboe/core";
+import { createMySqlAdapter, mySqlDialect } from "@oboe/db-mysql";
+import { createPostgresAdapter, postgresDialect } from "@oboe/db-postgres";
+import { createSqliteAdapter, sqliteDialect } from "@oboe/db-sqlite";
 import {
   createGeneratedMigration,
   createRelationalManifest,
@@ -366,7 +368,10 @@ async function createDatabaseAdapter(options: CliOptions): Promise<{
             await pool.query("COMMIT");
           },
           execute: async (sql: string, params?: unknown[]) =>
-            (await pool.execute(sql, params as never)) as [unknown[] | { affectedRows?: number; insertId?: number }, unknown],
+            (await pool.execute(sql, params as never)) as [
+              unknown[] | { affectedRows?: number; insertId?: number },
+              unknown,
+            ],
           getConnection: async () => {
             const connection = await pool.getConnection();
             return {
@@ -377,7 +382,10 @@ async function createDatabaseAdapter(options: CliOptions): Promise<{
                 await connection.commit();
               },
               execute: async (sql: string, params?: unknown[]) =>
-                (await connection.execute(sql, params as never)) as [unknown[] | { affectedRows?: number; insertId?: number }, unknown],
+                (await connection.execute(sql, params as never)) as [
+                  unknown[] | { affectedRows?: number; insertId?: number },
+                  unknown,
+                ],
               release: () => {
                 connection.release();
               },
@@ -448,9 +456,7 @@ function parseCronNumberSet(field: string, min: number, max: number) {
 function matchesCron(date: Date, expression: string) {
   const parts = expression.trim().split(/\s+/);
   if (parts.length !== 5 && parts.length !== 6) {
-    throw new Error(
-      `Unsupported cron "${expression}". Use 5 or 6 fields.`
-    );
+    throw new Error(`Unsupported cron "${expression}". Use 5 or 6 fields.`);
   }
 
   const [secondField, minuteField, hourField] =

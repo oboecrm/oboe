@@ -232,6 +232,7 @@ describe("createOboeRuntime", () => {
             {
               async handler() {
                 handled += 1;
+                return undefined;
               },
               slug: "future-task",
             },
@@ -311,6 +312,7 @@ describe("createOboeRuntime", () => {
               },
               async handler({ input }) {
                 handled.push(String(input.id));
+                return undefined;
               },
               slug: "serial-task",
             },
@@ -364,6 +366,7 @@ describe("createOboeRuntime", () => {
             {
               async handler({ input }) {
                 handled.push(String(input.id));
+                return undefined;
               },
               slug: "ordered-task",
             },
@@ -391,12 +394,19 @@ describe("createOboeRuntime", () => {
         id: "newest",
       },
     });
+    const firstQueuedJob = adapter.jobs[0];
+    const secondQueuedJob = adapter.jobs[1];
+
+    if (!firstQueuedJob || !secondQueuedJob) {
+      throw new Error("Expected two queued jobs for processing-order test.");
+    }
+
     adapter.jobs[0] = {
-      ...adapter.jobs[0]!,
+      ...firstQueuedJob,
       createdAt: "2026-01-01T00:00:00.000Z",
     };
     adapter.jobs[1] = {
-      ...adapter.jobs[1]!,
+      ...secondQueuedJob,
       createdAt: "2026-01-02T00:00:00.000Z",
     };
 

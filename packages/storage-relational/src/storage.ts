@@ -4,8 +4,8 @@ import type {
   CompiledSchema,
   Job,
   JobRequest,
-  QueueableJob,
   OboeRecord,
+  QueueableJob,
 } from "@oboe/core";
 
 import { RelationalMigrator } from "./migrator.js";
@@ -17,26 +17,6 @@ interface RecordRow {
   data: Record<string, unknown>;
   id: string;
   updated_at: Date | string;
-}
-
-interface JobRow {
-  attempt: number;
-  completed_at: Date | string | null;
-  concurrency_key: string | null;
-  created_at: Date | string;
-  id: number | string;
-  idempotency_key: string | null;
-  input: Record<string, unknown> | string;
-  last_error: string | null;
-  log: Array<{ createdAt?: string; created_at?: string; message: string }> | string;
-  max_retries: number;
-  output: Record<string, unknown> | string | null;
-  queue: string;
-  started_at: Date | string | null;
-  status: string;
-  task_slug: string;
-  updated_at: Date | string;
-  wait_until: Date | string;
 }
 
 function toRecord(row: RecordRow): OboeRecord {
@@ -57,67 +37,6 @@ function toRecord(row: RecordRow): OboeRecord {
       row.updated_at instanceof Date
         ? row.updated_at.toISOString()
         : String(row.updated_at),
-  };
-}
-
-function toJob(row: JobRow): Job {
-  const input =
-    typeof row.input === "string"
-      ? (JSON.parse(row.input) as Record<string, unknown>)
-      : row.input;
-  const output =
-    typeof row.output === "string"
-      ? (JSON.parse(row.output) as Record<string, unknown>)
-      : row.output;
-  const rawLog =
-    typeof row.log === "string"
-      ? (JSON.parse(row.log) as Array<{
-          createdAt?: string;
-          created_at?: string;
-          message: string;
-        }>)
-      : row.log;
-
-  return {
-    attempt: row.attempt,
-    completedAt:
-      row.completed_at instanceof Date
-        ? row.completed_at.toISOString()
-        : row.completed_at
-          ? String(row.completed_at)
-          : null,
-    concurrencyKey: row.concurrency_key,
-    createdAt:
-      row.created_at instanceof Date
-        ? row.created_at.toISOString()
-        : String(row.created_at),
-    id: String(row.id),
-    idempotencyKey: row.idempotency_key,
-    input,
-    lastError: row.last_error,
-    log: rawLog.map((entry) => ({
-      createdAt: entry.createdAt ?? entry.created_at ?? new Date().toISOString(),
-      message: entry.message,
-    })),
-    maxRetries: row.max_retries,
-    output: output ?? null,
-    queue: row.queue,
-    startedAt:
-      row.started_at instanceof Date
-        ? row.started_at.toISOString()
-        : row.started_at
-          ? String(row.started_at)
-          : null,
-    status: row.status as Job["status"],
-    task: row.task_slug,
-    updatedAt:
-      row.updated_at instanceof Date
-        ? row.updated_at.toISOString()
-        : String(row.updated_at),
-    waitUntil:
-      row.wait_until instanceof Date
-        ? row.wait_until.toISOString()
-        : String(row.wait_until),
   };
 }
 

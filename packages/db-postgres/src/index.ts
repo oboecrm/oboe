@@ -84,7 +84,9 @@ interface JobRow {
   idempotency_key: string | null;
   input: Record<string, unknown> | string;
   last_error: string | null;
-  log: Array<{ createdAt?: string; created_at?: string; message: string }> | string;
+  log:
+    | Array<{ createdAt?: string; created_at?: string; message: string }>
+    | string;
   max_retries: number;
   output: Record<string, unknown> | string | null;
   queue: string;
@@ -108,7 +110,9 @@ function parseObject(
 }
 
 function parseLog(
-  value: Array<{ createdAt?: string; created_at?: string; message: string }> | string
+  value:
+    | Array<{ createdAt?: string; created_at?: string; message: string }>
+    | string
 ) {
   const entries =
     typeof value === "string"
@@ -393,7 +397,11 @@ returning
   task_slug,
   updated_at,
   wait_until`.trim(),
-      [args.id, args.output ? JSON.stringify(args.output) : null, JSON.stringify(args.log ?? [])]
+      [
+        args.id,
+        args.output ? JSON.stringify(args.output) : null,
+        JSON.stringify(args.log ?? []),
+      ]
     );
 
     return row ? toJob(row) : null;
