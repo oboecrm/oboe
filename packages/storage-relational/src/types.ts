@@ -1,8 +1,13 @@
 import type {
+  AppendJobLogArgs,
   AuditEntry,
+  ClaimJobsArgs,
   CollectionQuery,
   CompiledSchema,
-  JobRequest,
+  CompleteJobArgs,
+  CountJobsArgs,
+  FailJobArgs,
+  QueueableJob,
 } from "@oboe/core";
 
 export interface RelationalStatement {
@@ -67,7 +72,14 @@ export interface RelationalDialect {
     id: string;
     returning: boolean;
   }) => RelationalStatement;
-  buildEnqueueJobStatement: (job: JobRequest) => RelationalStatement;
+  buildAppendJobLogStatement?: (args: AppendJobLogArgs) => RelationalStatement;
+  buildClaimJobsStatement?: (args: ClaimJobsArgs) => RelationalStatement;
+  buildCompleteJobStatement?: (args: CompleteJobArgs) => RelationalStatement;
+  buildCountRunnableOrActiveJobsStatement?: (
+    args: CountJobsArgs
+  ) => RelationalStatement;
+  buildEnqueueJobStatement: (job: QueueableJob) => RelationalStatement;
+  buildFailJobStatement?: (args: FailJobArgs) => RelationalStatement;
   buildFindRecordByIdStatement: (args: {
     collection: string;
     id: string;

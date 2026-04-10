@@ -35,6 +35,7 @@ import type {
   GraphQLExecutor,
   HookContext,
   InitializedEmailAdapter,
+  Job,
   JobDispatcher,
   JobRequest,
   OboeConfig,
@@ -43,6 +44,8 @@ import type {
   OboeGlobalRecord,
   OboeRecord,
   OboeRuntime,
+  ProcessingOrder,
+  QueueJobRequest,
   SchemaAdapter,
   SchemaParseFailure,
   SchemaParseResult,
@@ -55,6 +58,8 @@ import type {
   UploadInputFile,
   ValidationIssue,
   ValidationIssueResult,
+  RunJobsArgs,
+  RunJobsResult,
 } from "./types.js";
 import { OboeEmailError, OboeValidationError } from "./types.js";
 import {
@@ -956,18 +961,312 @@ async function runGlobalValidatorValidation(args: {
   return normalizeValidationIssues(result);
 }
 
-function createJobDispatcher(
-  db: DatabaseAdapter,
-  fallback: JobDispatcher
-): JobDispatcher {
+function hasDurableJobSupport(
+  db: DatabaseAdapter
+): db is DatabaseAdapter &
+  Required<
+    Pick<
+      DatabaseAdapter,
+      | "claimJobs"
+      | "completeJob"
+      | "countRunnableOrActiveJobs"
+      | "failJob"
+      | "queueJob"
+    >
+  > {
+  return (
+    typeof db.queueJob === "function" &&
+    typeof db.claimJobs === "function" &&
+    typeof db.completeJob === "function" &&
+    typeof db.failJob === "function" &&
+    typeof db.countRunnableOrActiveJobs === "function"
+  );
+}
+
+function getDefaultJobRetries(config: OboeConfig) {
+  return Math.max(0, config.jobs?.defaultRetries ?? config.jobs?.retryLimit ?? 0);
+}
+
+function getProcessingOrderForQueue(args: {
+  config: OboeConfig;
+  override?: ProcessingOrder;
+  queue: string;
+}): ProcessingOrder {
+  if (args.override) {
+    return args.override;
+  }
+
+  const configured = args.config.jobs?.processingOrder;
+
+  if (!configured) {
+    return "createdAt";
+  }
+
+  if (typeof configured === "function") {
+    return configured({
+      queue: args.queue,
+    });
+  }
+
+  if (typeof configured === "string") {
+    return configured;
+  }
+
+  return configured.queues?.[args.queue] ?? configured.default;
+}
+
+function normalizeWaitUntil(value?: Date | string) {
+  if (!value) {
+    return new Date().toISOString();
+  }
+
+  if (value instanceof Date) {
+    return value.toISOString();
+  }
+
+  return new Date(value).toISOString();
+}
+
+function serializeJobError(error: unknown) {
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  return String(error);
+}
+
+function cloneJob(job: Job): Job {
+  return {
+    ...job,
+    input: {
+      ...job.input,
+    },
+    log: job.log.map((entry) => ({
+      ...entry,
+    })),
+    output: job.output
+      ? {
+          ...job.output,
+        }
+      : null,
+  };
+}
+
+function createJobDispatcher(args: {
+  config: OboeConfig;
+  db: DatabaseAdapter;
+  fallback: JobDispatcher;
+  getRuntime: () => OboeRuntime;
+}): JobDispatcher {
+  const tasks = new Map(
+    (args.config.jobs?.tasks ?? []).map((task) => [task.slug, task] as const)
+  );
+
+  const queueViaDurableStore = async (
+    request: QueueJobRequest,
+    options?: {
+      allowUnknownTask?: boolean;
+    }
+  ) => {
+    const task = tasks.get(request.task);
+
+    if (!task && !options?.allowUnknownTask) {
+      throw new Error(`Unknown job task "${request.task}".`);
+    }
+
+    const queue = request.queue ?? "default";
+    const now = new Date().toISOString();
+    const log = (request.log ?? []).map((entry) => ({
+      createdAt: entry.createdAt ?? now,
+      message: entry.message,
+    }));
+    const id = crypto.randomUUID();
+    const concurrencyKey =
+      task && task.concurrency
+        ? task.concurrency.key({
+            input: request.input,
+            req: request.req,
+            task,
+          })
+        : null;
+
+    if (hasDurableJobSupport(args.db)) {
+      return args.db.queueJob({
+        concurrencyKey,
+        id,
+        idempotencyKey: request.idempotencyKey ?? null,
+        input: request.input,
+        log,
+        maxRetries: task?.retries ?? getDefaultJobRetries(args.config),
+        processingOrder: getProcessingOrderForQueue({
+          config: args.config,
+          override: request.processingOrder,
+          queue,
+        }),
+        queue,
+        task: request.task,
+        waitUntil: normalizeWaitUntil(request.waitUntil),
+      });
+    }
+
+    if (args.db.enqueueJob && options?.allowUnknownTask) {
+      await args.db.enqueueJob({
+        idempotencyKey: request.idempotencyKey,
+        name: request.task,
+        payload: request.input,
+        runAt:
+          typeof request.waitUntil === "string"
+            ? request.waitUntil
+            : request.waitUntil?.toISOString(),
+      });
+
+      const queued: Job = {
+        attempt: 0,
+        completedAt: null,
+        concurrencyKey,
+        createdAt: now,
+        id,
+        idempotencyKey: request.idempotencyKey ?? null,
+        input: {
+          ...request.input,
+        },
+        lastError: null,
+        log,
+        maxRetries: task?.retries ?? getDefaultJobRetries(args.config),
+        output: null,
+        queue,
+        startedAt: null,
+        status: "queued",
+        task: request.task,
+        updatedAt: now,
+        waitUntil: normalizeWaitUntil(request.waitUntil),
+      };
+      return queued;
+    }
+
+    return args.fallback.queue({
+      ...request,
+      queue,
+    });
+  };
+
+  const runTaskJob = async (job: Job) => {
+    const task = tasks.get(job.task);
+
+    if (!task) {
+      await args.db.failJob?.({
+        error: `No job handler registered for "${job.task}".`,
+        id: job.id,
+        log: [
+          {
+            createdAt: new Date().toISOString(),
+            message: `No job handler registered for "${job.task}".`,
+          },
+        ],
+        retry: false,
+      });
+      return;
+    }
+
+    try {
+      const result = await task.handler({
+        input: job.input,
+        job: cloneJob(job),
+        oboe: args.getRuntime(),
+        task,
+      });
+      const output =
+        result && typeof result === "object" && "output" in result
+          ? ((result.output ?? null) as Record<string, unknown> | null)
+          : null;
+
+      const completed = await args.db.completeJob?.({
+        id: job.id,
+        output: output ?? undefined,
+      });
+
+      if (completed && task.onSuccess) {
+        await task.onSuccess({
+          input: job.input,
+          job: completed,
+          oboe: args.getRuntime(),
+          output: (output ?? {}) as Record<string, unknown>,
+        });
+      }
+    } catch (error) {
+      const normalizedError =
+        error instanceof Error ? error : new Error(serializeJobError(error));
+      const retry = job.attempt <= job.maxRetries;
+      const failed = await args.db.failJob?.({
+        error: normalizedError.message,
+        id: job.id,
+        log: [
+          {
+            createdAt: new Date().toISOString(),
+            message: normalizedError.message,
+          },
+        ],
+        retry,
+      });
+
+      if (task.onFail && failed) {
+        await task.onFail({
+          error: normalizedError,
+          input: job.input,
+          job: failed,
+          oboe: args.getRuntime(),
+        });
+      }
+    }
+  };
+
   return {
     async enqueue(job) {
-      if (db.enqueueJob) {
-        await db.enqueueJob(job);
-        return;
+      await queueViaDurableStore(
+        {
+          idempotencyKey: job.idempotencyKey,
+          input: job.payload,
+          task: job.name,
+          waitUntil: job.runAt,
+        },
+        {
+          allowUnknownTask: true,
+        }
+      );
+    },
+    async queue(job) {
+      return queueViaDurableStore(job);
+    },
+    async run(runArgs: RunJobsArgs = {}): Promise<RunJobsResult> {
+      if (hasDurableJobSupport(args.db)) {
+        const claimed = await args.db.claimJobs({
+          allQueues: runArgs.allQueues,
+          limit: runArgs.limit,
+          processingOrder:
+            runArgs.processingOrder ??
+            getProcessingOrderForQueue({
+              config: args.config,
+              queue: runArgs.queue ?? "default",
+            }),
+          queue: runArgs.queue,
+        });
+
+        for (const job of claimed) {
+          await runTaskJob(job);
+        }
+
+        const remaining = await args.db.countRunnableOrActiveJobs({
+          allQueues: runArgs.allQueues,
+          queue: runArgs.queue,
+        });
+
+        return {
+          remaining,
+          total: claimed.length,
+        };
       }
 
-      await fallback.enqueue(job);
+      return args.fallback.run(runArgs);
     },
   };
 }
@@ -1954,8 +2253,46 @@ export function createOboeRuntime(args: {
     async enqueue(_job: JobRequest) {
       return;
     },
+    async queue(job: QueueJobRequest) {
+      const now = new Date().toISOString();
+
+      const queued: Job = {
+        attempt: 0,
+        completedAt: null,
+        concurrencyKey: null,
+        createdAt: now,
+        id: crypto.randomUUID(),
+        idempotencyKey: job.idempotencyKey ?? null,
+        input: {
+          ...job.input,
+        },
+        lastError: null,
+        log: job.log ?? [],
+        maxRetries: getDefaultJobRetries(resolvedConfig),
+        output: null,
+        queue: job.queue ?? "default",
+        startedAt: null,
+        status: "queued",
+        task: job.task,
+        updatedAt: now,
+        waitUntil: normalizeWaitUntil(job.waitUntil),
+      };
+      return queued;
+    },
+    async run() {
+      return {
+        remaining: 0,
+        total: 0,
+      };
+    },
   };
-  const jobs = createJobDispatcher(args.db, fallbackJobs);
+  let runtime!: OboeRuntime;
+  const jobs = createJobDispatcher({
+    config: resolvedConfig,
+    db: args.db,
+    fallback: fallbackJobs,
+    getRuntime: () => runtime,
+  });
   let graphql = noopGraphQLExecutor;
   let emailAdapter: InitializedEmailAdapter | null | undefined;
   let emailAdapterPromise: Promise<InitializedEmailAdapter | null> | null =
@@ -2120,7 +2457,7 @@ export function createOboeRuntime(args: {
     }
   };
 
-  const runtime: OboeRuntime = {
+  runtime = {
     auth: {
       collection() {
         return args.config.auth?.collection;

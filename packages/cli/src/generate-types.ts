@@ -147,6 +147,32 @@ function renderGlobals(schema: CompiledSchema) {
     .join("\n");
 }
 
+function taskInputTypeName(slug: string) {
+  return `${toPascalCase(slug)}TaskInput`;
+}
+
+function taskOutputTypeName(slug: string) {
+  return `${toPascalCase(slug)}TaskOutput`;
+}
+
+function renderTasks(config: OboeConfig) {
+  return (config.jobs?.tasks ?? [])
+    .map((task) => {
+      const inputLines = (task.inputSchema ?? []).map((field) =>
+        lineForField(field, fieldType(field))
+      );
+      const outputLines = (task.outputSchema ?? []).map((field) =>
+        lineForField(field, fieldType(field))
+      );
+
+      return [
+        renderInterface(taskInputTypeName(task.slug), inputLines),
+        renderInterface(taskOutputTypeName(task.slug), outputLines),
+      ].join("\n");
+    })
+    .join("\n");
+}
+
 function renderMaps(schema: CompiledSchema) {
   const collectionLines = [...schema.collections.keys()].map(
     (slug) => `  ${propertyName(slug)}: ${documentTypeName(slug)};`
@@ -159,6 +185,12 @@ function renderMaps(schema: CompiledSchema) {
   );
   const globalInputLines = [...schema.globals.keys()].map(
     (slug) => `  ${propertyName(slug)}: ${toPascalCase(slug)}GlobalInput;`
+  );
+  const taskInputLines = (schema.config.jobs?.tasks ?? []).map(
+    (task) => `  ${propertyName(task.slug)}: ${taskInputTypeName(task.slug)};`
+  );
+  const taskOutputLines = (schema.config.jobs?.tasks ?? []).map(
+    (task) => `  ${propertyName(task.slug)}: ${taskOutputTypeName(task.slug)};`
   );
 
   const globalsDefinition =
@@ -175,6 +207,12 @@ function renderMaps(schema: CompiledSchema) {
     renderInterface("CollectionInputs", collectionInputLines),
     globalsDefinition,
     globalInputsDefinition,
+    taskInputLines.length === 0
+      ? "export type TaskInputs = Record<string, never>;\n"
+      : renderInterface("TaskInputs", taskInputLines),
+    taskOutputLines.length === 0
+      ? "export type TaskOutputs = Record<string, never>;\n"
+      : renderInterface("TaskOutputs", taskOutputLines),
   ].join("\n");
 }
 
@@ -197,6 +235,7 @@ export function generateTypesSource(config: OboeConfig) {
     'import type { StoredFileData } from "@oboe/core";',
     renderCollections(schema),
     renderGlobals(schema),
+    renderTasks(resolved),
     renderMaps(schema),
   ];
 
@@ -209,6 +248,8 @@ export function generateTypesSource(config: OboeConfig) {
         "    collectionInputs: CollectionInputs;",
         "    globals: Globals;",
         "    globalInputs: GlobalInputs;",
+        "    taskInputs: TaskInputs;",
+        "    taskOutputs: TaskOutputs;",
         "  }",
         "}",
       ].join("\n")

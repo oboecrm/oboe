@@ -1,4 +1,4 @@
-import type { AuditEntry, CollectionQuery, JobRequest } from "@oboe/core";
+import type { AuditEntry, CollectionQuery, QueueableJob } from "@oboe/core";
 import type {
   AppliedRelationalMigration,
   RelationalDialect,
@@ -51,16 +51,29 @@ const oboeAuditLog = sqliteTable("oboe_audit_log", {
 const oboeJobOutbox = sqliteTable(
   "oboe_job_outbox",
   {
-    attempts: integer("attempts").notNull().default(1),
+    attempt: integer("attempt").notNull().default(0),
+    completedAt: text("completed_at"),
+    concurrencyKey: text("concurrency_key"),
     createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
-    id: integer("id").primaryKey({ autoIncrement: true }),
+    id: text("id").primaryKey(),
     idempotencyKey: text("idempotency_key"),
-    name: text("name").notNull(),
-    payload: text("payload", { mode: "json" }).notNull(),
-    runAt: text("run_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+    input: text("input", { mode: "json" }).notNull(),
+    lastError: text("last_error"),
+    log: text("log", { mode: "json" }).notNull().default(sql`'[]'`),
+    maxRetries: integer("max_retries").notNull().default(0),
+    output: text("output", { mode: "json" }),
+    queue: text("queue").notNull(),
+    startedAt: text("started_at"),
+    status: text("status").notNull(),
+    taskSlug: text("task_slug").notNull(),
+    updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+    waitUntil: text("wait_until").notNull().default(sql`CURRENT_TIMESTAMP`),
   },
   (table) => [
     uniqueIndex("oboe_job_outbox_idempotency_idx").on(table.idempotencyKey),
+    index("oboe_job_outbox_status_wait_until_idx").on(table.status, table.waitUntil),
+    index("oboe_job_outbox_queue_created_at_idx").on(table.queue, table.createdAt),
+    index("oboe_job_outbox_concurrency_idx").on(table.concurrencyKey),
   ]
 );
 
@@ -131,17 +144,36 @@ CREATE TABLE IF NOT EXISTS oboe_audit_log (
 );`.trim(),
   `
 CREATE TABLE IF NOT EXISTS oboe_job_outbox (
-  id integer PRIMARY KEY AUTOINCREMENT,
-  name text NOT NULL,
-  payload text NOT NULL,
+  id text PRIMARY KEY,
+  task_slug text NOT NULL,
+  queue text NOT NULL,
+  input text NOT NULL,
+  output text,
+  status text NOT NULL,
+  wait_until text NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at text NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  started_at text,
+  completed_at text,
+  attempt integer NOT NULL DEFAULT 0,
+  max_retries integer NOT NULL DEFAULT 0,
   idempotency_key text,
-  attempts integer NOT NULL DEFAULT 1,
-  run_at text NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  concurrency_key text,
+  last_error text,
+  log text NOT NULL DEFAULT '[]',
   created_at text NOT NULL DEFAULT CURRENT_TIMESTAMP
 );`.trim(),
   `
 CREATE UNIQUE INDEX IF NOT EXISTS oboe_job_outbox_idempotency_idx
   ON oboe_job_outbox (idempotency_key);`.trim(),
+  `
+CREATE INDEX IF NOT EXISTS oboe_job_outbox_status_wait_until_idx
+  ON oboe_job_outbox (status, wait_until);`.trim(),
+  `
+CREATE INDEX IF NOT EXISTS oboe_job_outbox_queue_created_at_idx
+  ON oboe_job_outbox (queue, created_at);`.trim(),
+  `
+CREATE INDEX IF NOT EXISTS oboe_job_outbox_concurrency_idx
+  ON oboe_job_outbox (concurrency_key);`.trim(),
   `
 CREATE TABLE IF NOT EXISTS oboe_migrations (
   id text PRIMARY KEY,
@@ -193,15 +225,27 @@ export const sqliteDialect: RelationalDialect = {
         .toSQL()
     );
   },
-  buildEnqueueJobStatement(job: JobRequest) {
+  buildEnqueueJobStatement(job: QueueableJob) {
     return toStatement(
       new SQLiteInsertBuilder(oboeJobOutbox, session, dialect)
         .values({
-          attempts: job.attempts ?? 1,
+          attempt: 0,
+          completedAt: null,
+          concurrencyKey: job.concurrencyKey ?? null,
+          createdAt: sql`CURRENT_TIMESTAMP`,
+          id: job.id,
           idempotencyKey: job.idempotencyKey ?? null,
-          name: job.name,
-          payload: job.payload,
-          runAt: job.runAt ?? new Date().toISOString(),
+          input: job.input,
+          lastError: null,
+          log: job.log ?? [],
+          maxRetries: job.maxRetries,
+          output: null,
+          queue: job.queue,
+          startedAt: null,
+          status: job.status ?? "queued",
+          taskSlug: job.task,
+          updatedAt: sql`CURRENT_TIMESTAMP`,
+          waitUntil: job.waitUntil,
         })
         .toSQL()
     );

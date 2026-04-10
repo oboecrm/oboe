@@ -20,7 +20,7 @@ describe("InMemoryJobRunner", () => {
     });
     await runner.drain();
 
-    expect(attempts).toBe(2);
+    expect(attempts).toBe(3);
     expect(runner.deadLetters).toHaveLength(1);
   });
 

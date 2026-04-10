@@ -127,11 +127,17 @@ export type Globals = Record<string, never>;
 
 export type GlobalInputs = Record<string, never>;
 
+export type TaskInputs = Record<string, never>;
+
+export type TaskOutputs = Record<string, never>;
+
 declare module "@oboe/core" {
   interface GeneratedTypes {
     collections: Collections;
     collectionInputs: CollectionInputs;
     globals: Globals;
     globalInputs: GlobalInputs;
+    taskInputs: TaskInputs;
+    taskOutputs: TaskOutputs;
   }
 }

@@ -622,8 +622,97 @@ export interface AuthConfig {
   collection?: string;
 }
 
+export type ProcessingOrder = "-createdAt" | "createdAt";
+
+export interface JobLogEntry {
+  createdAt: string;
+  message: string;
+}
+
+export type JobStatus = "completed" | "failed" | "processing" | "queued";
+
+export interface TaskConcurrencyConfig<
+  TInput = Record<string, unknown>,
+  TSlug extends string = string,
+> {
+  key: (args: {
+    input: TInput;
+    req?: Request;
+    task: TaskConfig<TSlug, TInput>;
+  }) => string | null;
+}
+
+export interface TaskSuccessContext<
+  TInput = Record<string, unknown>,
+  TOutput = Record<string, unknown>,
+> {
+  input: TInput;
+  job: Job;
+  oboe: OboeRuntime;
+  output: TOutput;
+  req?: Request;
+}
+
+export interface TaskFailureContext<TInput = Record<string, unknown>> {
+  error: Error;
+  input: TInput;
+  job: Job;
+  oboe: OboeRuntime;
+  req?: Request;
+}
+
+export interface TaskHandlerContext<
+  TInput = Record<string, unknown>,
+  TSlug extends string = string,
+> {
+  input: TInput;
+  job: Job;
+  oboe: OboeRuntime;
+  req?: Request;
+  task: TaskConfig<TSlug, TInput>;
+}
+
+export interface TaskConfig<
+  TSlug extends string = string,
+  TInput = Record<string, unknown>,
+  TOutput = Record<string, unknown>,
+> {
+  concurrency?: TaskConcurrencyConfig<TInput, TSlug>;
+  handler: (
+    context: TaskHandlerContext<TInput, TSlug>
+  ) =>
+    | Promise<{
+        output?: TOutput;
+      } | void>
+    | {
+        output?: TOutput;
+      }
+    | void;
+  inputSchema?: FieldConfig[];
+  interfaceName?: string;
+  label?: string;
+  onFail?: (
+    context: TaskFailureContext<TInput>
+  ) => Promise<void> | void;
+  onSuccess?: (
+    context: TaskSuccessContext<TInput, TOutput>
+  ) => Promise<void> | void;
+  outputSchema?: FieldConfig[];
+  retries?: number;
+  slug: TSlug;
+}
+
 export interface JobsConfig {
+  defaultRetries?: number;
+  processingOrder?:
+    | ProcessingOrder
+    | {
+        default: ProcessingOrder;
+        queues?: Record<string, ProcessingOrder>;
+      }
+    | ((args: { queue: string }) => ProcessingOrder);
   retryLimit?: number;
+  tasks?: TaskConfig[];
 }
 
 export interface TypeScriptConfig {
@@ -781,6 +870,8 @@ export interface BaseGeneratedTypes {
   collections: Record<string, OboeDocument>;
   globalInputs: Record<string, Record<string, unknown>>;
   globals: Record<string, OboeGlobalDocument>;
+  taskInputs: Record<string, Record<string, unknown>>;
+  taskOutputs: Record<string, Record<string, unknown>>;
 }
 
 // biome-ignore lint/suspicious/noEmptyInterface: declaration merging anchor for generated types
@@ -824,6 +915,26 @@ type GeneratedGlobalInputs<
     : Record<string, Record<string, unknown>>
   : Record<string, Record<string, unknown>>;
 
+type GeneratedTaskInputs<
+  TGeneratedTypes extends Partial<BaseGeneratedTypes>,
+> = TGeneratedTypes extends {
+  taskInputs: infer TInputs;
+}
+  ? TInputs extends object
+    ? TInputs
+    : Record<string, Record<string, unknown>>
+  : Record<string, Record<string, unknown>>;
+
+type GeneratedTaskOutputs<
+  TGeneratedTypes extends Partial<BaseGeneratedTypes>,
+> = TGeneratedTypes extends {
+  taskOutputs: infer TOutputs;
+}
+  ? TOutputs extends object
+    ? TOutputs
+    : Record<string, Record<string, unknown>>
+  : Record<string, Record<string, unknown>>;
+
 export type CollectionDocumentForSlug<
   TGeneratedTypes extends Partial<BaseGeneratedTypes>,
   TSlug extends string,
@@ -852,6 +963,20 @@ export type GlobalInputForSlug<
   ? GeneratedGlobalInputs<TGeneratedTypes>[TSlug]
   : Record<string, unknown>;
 
+export type TaskInputForSlug<
+  TGeneratedTypes extends Partial<BaseGeneratedTypes>,
+  TSlug extends string,
+> = TSlug extends keyof GeneratedTaskInputs<TGeneratedTypes>
+  ? GeneratedTaskInputs<TGeneratedTypes>[TSlug]
+  : Record<string, unknown>;
+
+export type TaskOutputForSlug<
+  TGeneratedTypes extends Partial<BaseGeneratedTypes>,
+  TSlug extends string,
+> = TSlug extends keyof GeneratedTaskOutputs<TGeneratedTypes>
+  ? GeneratedTaskOutputs<TGeneratedTypes>[TSlug]
+  : Record<string, unknown>;
+
 export interface AuditEntry {
   actor?: unknown;
   at: string;
@@ -869,6 +994,101 @@ export interface JobRequest {
   runAt?: string;
 }
 
+export interface Job {
+  attempt: number;
+  completedAt: string | null;
+  concurrencyKey: string | null;
+  createdAt: string;
+  id: string;
+  idempotencyKey: string | null;
+  input: Record<string, unknown>;
+  lastError: string | null;
+  log: JobLogEntry[];
+  maxRetries: number;
+  output: Record<string, unknown> | null;
+  queue: string;
+  startedAt: string | null;
+  status: JobStatus;
+  task: string;
+  updatedAt: string;
+  waitUntil: string;
+}
+
+export interface QueueJobRequest {
+  idempotencyKey?: string;
+  input: Record<string, unknown>;
+  log?: JobLogEntry[];
+  processingOrder?: ProcessingOrder;
+  queue?: string;
+  req?: Request;
+  task: string;
+  waitUntil?: Date | string;
+}
+
+export interface QueueJobArgs<
+  TGeneratedTypes extends Partial<BaseGeneratedTypes>,
+  TTask extends string,
+> extends Omit<QueueJobRequest, "input" | "task"> {
+  input: TaskInputForSlug<TGeneratedTypes, TTask>;
+  task: TTask;
+}
+
+export interface RunJobsArgs {
+  allQueues?: boolean;
+  limit?: number;
+  processingOrder?: ProcessingOrder;
+  queue?: string;
+}
+
+export interface RunJobsResult {
+  remaining: number;
+  total: number;
+}
+
+export interface QueueableJob {
+  concurrencyKey?: string | null;
+  id: string;
+  idempotencyKey?: string | null;
+  input: Record<string, unknown>;
+  log?: JobLogEntry[];
+  maxRetries: number;
+  processingOrder?: ProcessingOrder;
+  queue: string;
+  status?: JobStatus;
+  task: string;
+  waitUntil: string;
+}
+
+export interface ClaimJobsArgs {
+  allQueues?: boolean;
+  limit?: number;
+  processingOrder?: ProcessingOrder;
+  queue?: string;
+}
+
+export interface CompleteJobArgs {
+  id: string;
+  log?: JobLogEntry[];
+  output?: Record<string, unknown>;
+}
+
+export interface FailJobArgs {
+  error: string;
+  id: string;
+  log?: JobLogEntry[];
+  retry: boolean;
+}
+
+export interface AppendJobLogArgs {
+  entries: JobLogEntry[];
+  id: string;
+}
+
+export interface CountJobsArgs {
+  allQueues?: boolean;
+  queue?: string;
+}
+
 export interface GraphQLExecutor {
   execute: (args: {
     query: string;
@@ -876,8 +1096,14 @@ export interface GraphQLExecutor {
   }) => Promise<unknown>;
 }
 
-export interface JobDispatcher {
+export interface JobDispatcher<
+  TGeneratedTypes extends Partial<BaseGeneratedTypes> = GeneratedTypes,
+> {
   enqueue: (job: JobRequest) => Promise<void>;
+  queue: <TTask extends string>(
+    job: QueueJobArgs<TGeneratedTypes, TTask>
+  ) => Promise<Job>;
+  run: (args?: RunJobsArgs) => Promise<RunJobsResult>;
 }
 
 export interface EventBus {
@@ -889,6 +1115,10 @@ export interface EventBus {
 }
 
 export interface DatabaseAdapter {
+  appendJobLog?: (args: AppendJobLogArgs) => Promise<Job | null>;
+  claimJobs?: (args: ClaimJobsArgs) => Promise<Job[]>;
+  completeJob?: (args: CompleteJobArgs) => Promise<Job | null>;
+  countRunnableOrActiveJobs?: (args?: CountJobsArgs) => Promise<number>;
   create: (args: {
     collection: string;
     data: Record<string, unknown>;
@@ -898,6 +1128,7 @@ export interface DatabaseAdapter {
     id: string;
   }) => Promise<OboeRecord | null>;
   enqueueJob?: (job: JobRequest) => Promise<void>;
+  failJob?: (args: FailJobArgs) => Promise<Job | null>;
   find: (args: {
     collection: string;
     query?: CollectionQuery;
@@ -908,6 +1139,7 @@ export interface DatabaseAdapter {
   }) => Promise<OboeRecord | null>;
   findGlobal: (args: { slug: string }) => Promise<OboeGlobalRecord | null>;
   initialize?: (schema: CompiledSchema) => Promise<void>;
+  queueJob?: (job: QueueableJob) => Promise<Job>;
   recordAudit?: (entry: AuditEntry) => Promise<void>;
   transaction?: <T>(
     callback: (adapter: DatabaseAdapter) => Promise<T>
@@ -1000,7 +1232,7 @@ export interface OboeRuntime<
   }) => Promise<GlobalDocumentForSlug<TGeneratedTypes, TSlug> | null>;
   graphql: GraphQLExecutor;
   initialize: () => Promise<void>;
-  jobs: JobDispatcher;
+  jobs: JobDispatcher<TGeneratedTypes>;
   schema: CompiledSchema;
   sendEmail: (message: SendEmailOptions) => Promise<unknown>;
   setGraphQLExecutor: (executor: GraphQLExecutor) => void;

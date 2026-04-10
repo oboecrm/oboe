@@ -1,4 +1,4 @@
-import type { AuditEntry, CollectionQuery, JobRequest } from "@oboe/core";
+import type { AuditEntry, CollectionQuery, QueueableJob } from "@oboe/core";
 import type {
   AppliedRelationalMigration,
   RelationalDialect,
@@ -64,17 +64,35 @@ const oboeAuditLog = mysqlTable("oboe_audit_log", {
 const oboeJobOutbox = mysqlTable(
   "oboe_job_outbox",
   {
-    attempts: int("attempts").notNull().default(1),
+    attempt: int("attempt").notNull().default(0),
+    completedAt: datetime("completed_at", {
+      mode: "string",
+    }),
+    concurrencyKey: varchar("concurrency_key", { length: 191 }),
     createdAt: datetime("created_at", {
       mode: "string",
     })
       .notNull()
       .default(sql`CURRENT_TIMESTAMP`),
-    id: serial("id").primaryKey(),
+    id: varchar("id", { length: 191 }).primaryKey(),
     idempotencyKey: varchar("idempotency_key", { length: 191 }),
-    name: varchar("name", { length: 191 }).notNull(),
-    payload: json("payload").notNull(),
-    runAt: datetime("run_at", {
+    input: json("input").notNull(),
+    lastError: varchar("last_error", { length: 1024 }),
+    log: json("log").notNull(),
+    maxRetries: int("max_retries").notNull().default(0),
+    output: json("output"),
+    queue: varchar("queue", { length: 191 }).notNull(),
+    startedAt: datetime("started_at", {
+      mode: "string",
+    }),
+    status: varchar("status", { length: 32 }).notNull(),
+    taskSlug: varchar("task_slug", { length: 191 }).notNull(),
+    updatedAt: datetime("updated_at", {
+      mode: "string",
+    })
+      .notNull()
+      .default(sql`CURRENT_TIMESTAMP`),
+    waitUntil: datetime("wait_until", {
       mode: "string",
     })
       .notNull()
@@ -82,6 +100,9 @@ const oboeJobOutbox = mysqlTable(
   },
   (table) => [
     uniqueIndex("oboe_job_outbox_idempotency_idx").on(table.idempotencyKey),
+    index("oboe_job_outbox_status_wait_until_idx").on(table.status, table.waitUntil),
+    index("oboe_job_outbox_queue_created_at_idx").on(table.queue, table.createdAt),
+    index("oboe_job_outbox_concurrency_idx").on(table.concurrencyKey),
   ]
 );
 
@@ -151,15 +172,34 @@ CREATE TABLE IF NOT EXISTS oboe_audit_log (
 );`.trim(),
   `
 CREATE TABLE IF NOT EXISTS oboe_job_outbox (
-  id bigint unsigned NOT NULL AUTO_INCREMENT PRIMARY KEY,
-  name varchar(191) NOT NULL,
-  payload json NOT NULL,
+  id varchar(191) PRIMARY KEY,
+  task_slug varchar(191) NOT NULL,
+  queue varchar(191) NOT NULL,
+  input json NOT NULL,
+  output json,
+  status varchar(32) NOT NULL,
+  wait_until datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  started_at datetime,
+  completed_at datetime,
+  attempt int NOT NULL DEFAULT 0,
+  max_retries int NOT NULL DEFAULT 0,
   idempotency_key varchar(191),
-  attempts int NOT NULL DEFAULT 1,
-  run_at datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  concurrency_key varchar(191),
+  last_error varchar(1024),
+  log json NOT NULL,
   created_at datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
   UNIQUE KEY oboe_job_outbox_idempotency_idx (idempotency_key)
 );`.trim(),
+  `
+CREATE INDEX oboe_job_outbox_status_wait_until_idx
+  ON oboe_job_outbox (status, wait_until);`.trim(),
+  `
+CREATE INDEX oboe_job_outbox_queue_created_at_idx
+  ON oboe_job_outbox (queue, created_at);`.trim(),
+  `
+CREATE INDEX oboe_job_outbox_concurrency_idx
+  ON oboe_job_outbox (concurrency_key);`.trim(),
   `
 CREATE TABLE IF NOT EXISTS oboe_migrations (
   id varchar(191) PRIMARY KEY,
@@ -211,17 +251,27 @@ export const mySqlDialect: RelationalDialect = {
         .toSQL()
     );
   },
-  buildEnqueueJobStatement(job: JobRequest) {
+  buildEnqueueJobStatement(job: QueueableJob) {
     return toStatement(
       new MySqlInsertBuilder(oboeJobOutbox, session, dialect)
         .values({
-          attempts: job.attempts ?? 1,
+          attempt: 0,
+          completedAt: null,
+          concurrencyKey: job.concurrencyKey ?? null,
+          createdAt: sql`CURRENT_TIMESTAMP`,
+          id: job.id,
           idempotencyKey: job.idempotencyKey ?? null,
-          name: job.name,
-          payload: job.payload,
-          runAt:
-            job.runAt ??
-            new Date().toISOString().slice(0, 19).replace("T", " "),
+          input: job.input,
+          lastError: null,
+          log: job.log ?? [],
+          maxRetries: job.maxRetries,
+          output: null,
+          queue: job.queue,
+          startedAt: null,
+          status: job.status ?? "queued",
+          taskSlug: job.task,
+          updatedAt: sql`CURRENT_TIMESTAMP`,
+          waitUntil: job.waitUntil,
         })
         .toSQL()
     );

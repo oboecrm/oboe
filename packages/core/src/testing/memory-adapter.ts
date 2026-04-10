@@ -1,11 +1,19 @@
 import { matchesWhere as queryMatchesWhere, sortRecords } from "../query.js";
 import type {
+  AppendJobLogArgs,
   AuditEntry,
+  ClaimJobsArgs,
   CollectionQuery,
+  CompleteJobArgs,
+  CountJobsArgs,
   DatabaseAdapter,
+  FailJobArgs,
+  Job,
   JobRequest,
   OboeGlobalRecord,
   OboeRecord,
+  ProcessingOrder,
+  QueueableJob,
 } from "../types.js";
 
 const GLOBAL_COLLECTION = "__oboe_globals";
@@ -16,8 +24,58 @@ function randomId() {
 
 export class MemoryAdapter implements DatabaseAdapter {
   readonly audits: AuditEntry[] = [];
-  readonly jobs: JobRequest[] = [];
+  readonly jobs: Job[] = [];
   readonly store = new Map<string, Map<string, OboeRecord>>();
+
+  private matchesQueueFilter(job: Job, args?: CountJobsArgs | ClaimJobsArgs) {
+    if (args?.allQueues) {
+      return true;
+    }
+
+    return job.queue === (args?.queue ?? "default");
+  }
+
+  private runnableJobs(args?: ClaimJobsArgs) {
+    const now = new Date().toISOString();
+    return this.jobs.filter(
+      (job) =>
+        job.status === "queued" &&
+        job.waitUntil <= now &&
+        this.matchesQueueFilter(job, args) &&
+        (!job.concurrencyKey ||
+          !this.jobs.some(
+            (candidate) =>
+              candidate.id !== job.id &&
+              candidate.status === "processing" &&
+              candidate.concurrencyKey === job.concurrencyKey
+          ))
+    );
+  }
+
+  private sortJobs<TJob extends Job>(jobs: TJob[], order: ProcessingOrder) {
+    return [...jobs].sort((left, right) => {
+      const delta =
+        new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime();
+      return order === "createdAt" ? delta : -delta;
+    });
+  }
+
+  private cloneJob(job: Job): Job {
+    return {
+      ...job,
+      input: {
+        ...job.input,
+      },
+      log: job.log.map((entry) => ({
+        ...entry,
+      })),
+      output: job.output
+        ? {
+            ...job.output,
+          }
+        : null,
+    };
+  }
 
   async create(args: {
     collection: string;
@@ -50,8 +108,106 @@ export class MemoryAdapter implements DatabaseAdapter {
     return existing;
   }
 
+  async appendJobLog(args: AppendJobLogArgs): Promise<Job | null> {
+    const job = this.jobs.find((entry) => entry.id === args.id);
+
+    if (!job) {
+      return null;
+    }
+
+    job.log.push(...args.entries);
+    job.updatedAt = new Date().toISOString();
+    return this.cloneJob(job);
+  }
+
+  async claimJobs(args: ClaimJobsArgs): Promise<Job[]> {
+    const order = args.processingOrder ?? "createdAt";
+    const limit = args.limit ?? 10;
+    const now = new Date().toISOString();
+    const seenConcurrencyKeys = new Set<string>();
+    const claimed = this.sortJobs(this.runnableJobs(args), order)
+      .filter((job) => {
+        if (!job.concurrencyKey) {
+          return true;
+        }
+
+        if (seenConcurrencyKeys.has(job.concurrencyKey)) {
+          return false;
+        }
+
+        seenConcurrencyKeys.add(job.concurrencyKey);
+        return true;
+      })
+      .slice(0, limit);
+
+    for (const job of claimed) {
+      job.attempt += 1;
+      job.startedAt = now;
+      job.status = "processing";
+      job.updatedAt = now;
+    }
+
+    return claimed.map((job) => this.cloneJob(job));
+  }
+
+  async completeJob(args: CompleteJobArgs): Promise<Job | null> {
+    const job = this.jobs.find((entry) => entry.id === args.id);
+
+    if (!job) {
+      return null;
+    }
+
+    const now = new Date().toISOString();
+    job.completedAt = now;
+    job.log.push(...(args.log ?? []));
+    job.output = args.output ?? null;
+    job.status = "completed";
+    job.updatedAt = now;
+    return this.cloneJob(job);
+  }
+
+  async countRunnableOrActiveJobs(args?: CountJobsArgs): Promise<number> {
+    const now = new Date().toISOString();
+    return this.jobs.filter(
+      (job) =>
+        this.matchesQueueFilter(job, args) &&
+        (job.status === "processing" ||
+          (job.status === "queued" && job.waitUntil <= now))
+    ).length;
+  }
+
   async enqueueJob(job: JobRequest): Promise<void> {
-    this.jobs.push(job);
+    await this.queueJob({
+      id: randomId(),
+      idempotencyKey: job.idempotencyKey ?? null,
+      input: job.payload,
+      maxRetries: 0,
+      queue: "default",
+      task: job.name,
+      waitUntil: job.runAt ?? new Date().toISOString(),
+    });
+  }
+
+  async failJob(args: FailJobArgs): Promise<Job | null> {
+    const job = this.jobs.find((entry) => entry.id === args.id);
+
+    if (!job) {
+      return null;
+    }
+
+    const now = new Date().toISOString();
+    job.lastError = args.error;
+    job.log.push(...(args.log ?? []));
+    job.updatedAt = now;
+    if (args.retry) {
+      job.startedAt = null;
+      job.status = "queued";
+    } else {
+      job.completedAt = now;
+      job.status = "failed";
+    }
+
+    return this.cloneJob(job);
   }
 
   async find(args: {
@@ -97,6 +253,47 @@ export class MemoryAdapter implements DatabaseAdapter {
       slug: args.slug,
       updatedAt: record.updatedAt,
     };
+  }
+
+  async queueJob(job: QueueableJob): Promise<Job> {
+    if (
+      job.idempotencyKey &&
+      this.jobs.some((entry) => entry.idempotencyKey === job.idempotencyKey)
+    ) {
+      const existing = this.jobs.find(
+        (entry) => entry.idempotencyKey === job.idempotencyKey
+      );
+      if (!existing) {
+        throw new Error("Expected existing job for idempotency key.");
+      }
+
+      return this.cloneJob(existing);
+    }
+
+    const now = new Date().toISOString();
+    const created: Job = {
+      attempt: 0,
+      completedAt: null,
+      concurrencyKey: job.concurrencyKey ?? null,
+      createdAt: now,
+      id: job.id,
+      idempotencyKey: job.idempotencyKey ?? null,
+      input: {
+        ...job.input,
+      },
+      lastError: null,
+      log: [...(job.log ?? [])],
+      maxRetries: job.maxRetries,
+      output: null,
+      queue: job.queue,
+      startedAt: null,
+      status: job.status ?? "queued",
+      task: job.task,
+      updatedAt: now,
+      waitUntil: job.waitUntil,
+    };
+    this.jobs.push(created);
+    return this.cloneJob(created);
   }
 
   async recordAudit(entry: AuditEntry): Promise<void> {

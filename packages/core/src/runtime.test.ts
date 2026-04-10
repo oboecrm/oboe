@@ -172,6 +172,241 @@ describe("createOboeRuntime", () => {
     expect(adapter.audits).toHaveLength(1);
   });
 
+  it("queues durable jobs and runs task handlers", async () => {
+    const adapter = createMemoryAdapter();
+    const runtime = createOboeRuntime({
+      config: defineConfig({
+        jobs: {
+          tasks: [
+            {
+              async handler({ input }) {
+                return {
+                  output: {
+                    syncedId: String(input.id),
+                  },
+                };
+              },
+              outputSchema: [
+                {
+                  name: "syncedId",
+                  type: "text",
+                },
+              ],
+              slug: "sync-contact",
+            },
+          ],
+        },
+        modules: [
+          defineModule({
+            collections: [],
+            slug: "crm",
+          }),
+        ],
+      }),
+      db: adapter,
+    });
+
+    const queued = await runtime.jobs.queue({
+      input: {
+        id: "contact-1",
+      },
+      task: "sync-contact",
+    });
+    const result = await runtime.jobs.run();
+
+    expect(queued.status).toBe("queued");
+    expect(result.total).toBe(1);
+    expect(adapter.jobs[0]?.status).toBe("completed");
+    expect(adapter.jobs[0]?.output).toEqual({
+      syncedId: "contact-1",
+    });
+  });
+
+  it("does not claim future jobs before waitUntil", async () => {
+    const adapter = createMemoryAdapter();
+    let handled = 0;
+    const runtime = createOboeRuntime({
+      config: defineConfig({
+        jobs: {
+          tasks: [
+            {
+              async handler() {
+                handled += 1;
+              },
+              slug: "future-task",
+            },
+          ],
+        },
+        modules: [
+          defineModule({
+            collections: [],
+            slug: "crm",
+          }),
+        ],
+      }),
+      db: adapter,
+    });
+
+    await runtime.jobs.queue({
+      input: {},
+      task: "future-task",
+      waitUntil: "2099-01-01T00:00:00.000Z",
+    });
+    const result = await runtime.jobs.run();
+
+    expect(result.total).toBe(0);
+    expect(handled).toBe(0);
+    expect(adapter.jobs[0]?.status).toBe("queued");
+  });
+
+  it("retries failed tasks and marks them failed after max retries", async () => {
+    const adapter = createMemoryAdapter();
+    let attempts = 0;
+    const runtime = createOboeRuntime({
+      config: defineConfig({
+        jobs: {
+          tasks: [
+            {
+              async handler() {
+                attempts += 1;
+                throw new Error("boom");
+              },
+              retries: 1,
+              slug: "always-fail",
+            },
+          ],
+        },
+        modules: [
+          defineModule({
+            collections: [],
+            slug: "crm",
+          }),
+        ],
+      }),
+      db: adapter,
+    });
+
+    await runtime.jobs.queue({
+      input: {},
+      task: "always-fail",
+    });
+    await runtime.jobs.run();
+    await runtime.jobs.run();
+
+    expect(attempts).toBe(2);
+    expect(adapter.jobs[0]?.status).toBe("failed");
+    expect(adapter.jobs[0]?.lastError).toBe("boom");
+  });
+
+  it("claims at most one queued job per concurrency key in a batch", async () => {
+    const adapter = createMemoryAdapter();
+    const handled: string[] = [];
+    const runtime = createOboeRuntime({
+      config: defineConfig({
+        jobs: {
+          tasks: [
+            {
+              concurrency: {
+                key: ({ input }) => String(input.group),
+              },
+              async handler({ input }) {
+                handled.push(String(input.id));
+              },
+              slug: "serial-task",
+            },
+          ],
+        },
+        modules: [
+          defineModule({
+            collections: [],
+            slug: "crm",
+          }),
+        ],
+      }),
+      db: adapter,
+    });
+
+    await runtime.jobs.queue({
+      input: {
+        group: "contacts",
+        id: "1",
+      },
+      task: "serial-task",
+    });
+    await runtime.jobs.queue({
+      input: {
+        group: "contacts",
+        id: "2",
+      },
+      task: "serial-task",
+    });
+
+    const firstRun = await runtime.jobs.run({
+      limit: 10,
+    });
+    const secondRun = await runtime.jobs.run({
+      limit: 10,
+    });
+
+    expect(firstRun.total).toBe(1);
+    expect(secondRun.total).toBe(1);
+    expect(handled).toEqual(["1", "2"]);
+  });
+
+  it("respects processing order and legacy enqueue shim", async () => {
+    const adapter = createMemoryAdapter();
+    const handled: string[] = [];
+    const runtime = createOboeRuntime({
+      config: defineConfig({
+        jobs: {
+          processingOrder: "-createdAt",
+          tasks: [
+            {
+              async handler({ input }) {
+                handled.push(String(input.id));
+              },
+              slug: "ordered-task",
+            },
+          ],
+        },
+        modules: [
+          defineModule({
+            collections: [],
+            slug: "crm",
+          }),
+        ],
+      }),
+      db: adapter,
+    });
+
+    await runtime.jobs.enqueue({
+      name: "ordered-task",
+      payload: {
+        id: "oldest",
+      },
+    });
+    await runtime.jobs.enqueue({
+      name: "ordered-task",
+      payload: {
+        id: "newest",
+      },
+    });
+    adapter.jobs[0] = {
+      ...adapter.jobs[0]!,
+      createdAt: "2026-01-01T00:00:00.000Z",
+    };
+    adapter.jobs[1] = {
+      ...adapter.jobs[1]!,
+      createdAt: "2026-01-02T00:00:00.000Z",
+    };
+
+    await runtime.jobs.run({
+      limit: 2,
+    });
+
+    expect(handled).toEqual(["newest", "oldest"]);
+  });
+
   it("accepts relationship aliases and validates related records exist", async () => {
     const adapter = createMemoryAdapter();
     const runtime = createOboeRuntime({

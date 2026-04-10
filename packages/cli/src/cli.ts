@@ -2,9 +2,12 @@
 import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { compileSchema, type OboeConfig } from "@oboe/core";
+import { compileSchema, getOboe, type DatabaseAdapter, type OboeConfig } from "@oboe/core";
+import { createMySqlAdapter } from "@oboe/db-mysql";
 import { mySqlDialect } from "@oboe/db-mysql";
+import { createPostgresAdapter } from "@oboe/db-postgres";
 import { postgresDialect } from "@oboe/db-postgres";
+import { createSqliteAdapter } from "@oboe/db-sqlite";
 import { sqliteDialect } from "@oboe/db-sqlite";
 import {
   createGeneratedMigration,
@@ -30,35 +33,53 @@ import {
 type DialectName = "mysql" | "postgres" | "sqlite";
 
 interface CliOptions {
+  allQueues?: boolean;
   config: string;
+  cron?: string;
   dialect?: DialectName;
   file?: string;
+  limit?: number;
   name?: string;
+  queue?: string;
   url?: string;
 }
 
 function parseArgs(argv: string[]) {
   const [command, ...rest] = argv;
-  const options: Record<string, string> = {};
+  const options: Record<string, string | boolean> = {};
 
-  for (let index = 0; index < rest.length; index += 2) {
+  for (let index = 0; index < rest.length; index += 1) {
     const key = rest[index];
+    if (!key?.startsWith("--")) {
+      continue;
+    }
+
     const value = rest[index + 1];
-    if (!key?.startsWith("--") || !value) {
+    if (!value || value.startsWith("--")) {
+      options[key.slice(2)] = true;
       continue;
     }
 
     options[key.slice(2)] = value;
+    index += 1;
   }
+
+  const stringOption = (value: string | boolean | undefined) =>
+    typeof value === "string" ? value : undefined;
 
   return {
     command,
     options: {
-      config: options.config ?? "oboe.config.ts",
+      allQueues: options["all-queues"] === true,
+      config: stringOption(options.config) ?? "oboe.config.ts",
+      cron: stringOption(options.cron),
       dialect: options.dialect as DialectName,
-      file: options.file,
-      name: options.name,
-      url: options.url,
+      file: stringOption(options.file),
+      limit:
+        typeof options.limit === "string" ? Number(options.limit) : undefined,
+      name: stringOption(options.name),
+      queue: stringOption(options.queue),
+      url: stringOption(options.url),
     } satisfies CliOptions,
   };
 }
@@ -89,7 +110,12 @@ function getDialect(name: DialectName): RelationalDialect {
 
 function requireDialect(
   options: CliOptions,
-  command: "db:push" | "migrate" | "migrate:generate" | "migrate:status"
+  command:
+    | "db:push"
+    | "jobs:run"
+    | "migrate"
+    | "migrate:generate"
+    | "migrate:status"
 ) {
   if (!options.dialect) {
     throw new Error(`The "${command}" command requires --dialect.`);
@@ -306,6 +332,147 @@ async function createQueryable(options: CliOptions): Promise<{
   };
 }
 
+async function createDatabaseAdapter(options: CliOptions): Promise<{
+  adapter: DatabaseAdapter;
+  close: () => Promise<void>;
+}> {
+  if (options.dialect === "postgres") {
+    const pool = new Pool({
+      connectionString: options.url ?? process.env.DATABASE_URL,
+    });
+
+    return {
+      adapter: createPostgresAdapter({
+        pool,
+      }),
+      close: async () => {
+        await pool.end();
+      },
+    };
+  }
+
+  if (options.dialect === "mysql") {
+    const pool = mysql.createPool({
+      uri: options.url ?? process.env.DATABASE_URL,
+    });
+
+    return {
+      adapter: createMySqlAdapter({
+        client: {
+          beginTransaction: async () => {
+            await pool.query("START TRANSACTION");
+          },
+          commit: async () => {
+            await pool.query("COMMIT");
+          },
+          execute: async (sql: string, params?: unknown[]) =>
+            (await pool.execute(sql, params as never)) as [unknown[] | { affectedRows?: number; insertId?: number }, unknown],
+          getConnection: async () => {
+            const connection = await pool.getConnection();
+            return {
+              beginTransaction: async () => {
+                await connection.beginTransaction();
+              },
+              commit: async () => {
+                await connection.commit();
+              },
+              execute: async (sql: string, params?: unknown[]) =>
+                (await connection.execute(sql, params as never)) as [unknown[] | { affectedRows?: number; insertId?: number }, unknown],
+              release: () => {
+                connection.release();
+              },
+              rollback: async () => {
+                await connection.rollback();
+              },
+            };
+          },
+          rollback: async () => {
+            await pool.query("ROLLBACK");
+          },
+        },
+      }),
+      close: async () => {
+        await pool.end();
+      },
+    };
+  }
+
+  const database = new Database(
+    options.file ??
+      process.env.SQLITE_FILE ??
+      path.join(process.cwd(), ".oboe", "oboe.db")
+  );
+
+  return {
+    adapter: createSqliteAdapter({
+      database,
+    }),
+    close: async () => {
+      database.close();
+    },
+  };
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function parseCronNumberSet(field: string, min: number, max: number) {
+  if (field === "*") {
+    return null;
+  }
+
+  const values = new Set<number>();
+  for (const part of field.split(",")) {
+    if (part.startsWith("*/")) {
+      const step = Number(part.slice(2));
+      if (!Number.isFinite(step) || step <= 0) {
+        throw new Error(`Invalid cron step "${part}".`);
+      }
+      for (let current = min; current <= max; current += step) {
+        values.add(current);
+      }
+      continue;
+    }
+
+    const value = Number(part);
+    if (!Number.isFinite(value) || value < min || value > max) {
+      throw new Error(`Invalid cron value "${part}".`);
+    }
+    values.add(value);
+  }
+
+  return values;
+}
+
+function matchesCron(date: Date, expression: string) {
+  const parts = expression.trim().split(/\s+/);
+  if (parts.length !== 5 && parts.length !== 6) {
+    throw new Error(
+      `Unsupported cron "${expression}". Use 5 or 6 fields.`
+    );
+  }
+
+  const [secondField, minuteField, hourField] =
+    parts.length === 6 ? parts : ["0", parts[0], parts[1]];
+  const dayField = parts.length === 6 ? parts[3] : parts[2];
+  const monthField = parts.length === 6 ? parts[4] : parts[3];
+  const weekDayField = parts.length === 6 ? parts[5] : parts[4];
+  const checks = [
+    [secondField, date.getSeconds(), 0, 59],
+    [minuteField, date.getMinutes(), 0, 59],
+    [hourField, date.getHours(), 0, 23],
+    [dayField, date.getDate(), 1, 31],
+    [monthField, date.getMonth() + 1, 1, 12],
+    [weekDayField, date.getDay(), 0, 6],
+  ] as const;
+
+  return checks.every(([field, value, min, max]) => {
+    const allowed = parseCronNumberSet(field, min, max);
+    return allowed ? allowed.has(value) : true;
+  });
+}
+
 async function commandGenerate(options: CliOptions) {
   const dialectName = requireDialect(options, "migrate:generate");
   const { config } = await loadConfig(options.config);
@@ -503,12 +670,57 @@ async function commandGenerateTypes(options: CliOptions) {
   );
 }
 
+async function commandJobsRun(options: CliOptions) {
+  const dialectName = requireDialect(options, "jobs:run");
+  const { config } = await loadConfig(options.config);
+  const { adapter, close } = await createDatabaseAdapter({
+    ...options,
+    dialect: dialectName,
+  });
+
+  try {
+    const runtime = await getOboe({
+      config,
+      db: adapter,
+    });
+
+    const runOnce = async () => {
+      const result = await runtime.jobs.run({
+        allQueues: options.allQueues,
+        limit: options.limit,
+        queue: options.queue,
+      });
+      console.log(JSON.stringify(result));
+      return result;
+    };
+
+    if (!options.cron) {
+      await runOnce();
+      return;
+    }
+
+    let lastTick = "";
+    // Poll once per second and execute when the cron expression matches.
+    for (;;) {
+      const now = new Date();
+      const tick = now.toISOString().slice(0, 19);
+      if (tick !== lastTick && matchesCron(now, options.cron)) {
+        await runOnce();
+        lastTick = tick;
+      }
+      await sleep(1000);
+    }
+  } finally {
+    await close();
+  }
+}
+
 async function main() {
   const { command, options } = parseArgs(process.argv.slice(2));
 
   if (!command) {
     throw new Error(
-      "Usage: oboe <generate:types|migrate:generate|migrate|migrate:status|db:push> [--config oboe.config.ts] [--dialect <postgres|mysql|sqlite>] [--url ...] [--file ...]"
+      "Usage: oboe <generate:types|migrate:generate|migrate|migrate:status|db:push|jobs:run> [--config oboe.config.ts] [--dialect <postgres|mysql|sqlite>] [--url ...] [--file ...]"
     );
   }
 
@@ -527,6 +739,9 @@ async function main() {
       return;
     case "db:push":
       await commandPush(options);
+      return;
+    case "jobs:run":
+      await commandJobsRun(options);
       return;
     default:
       throw new Error(`Unknown command "${command}".`);

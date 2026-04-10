@@ -1,4 +1,4 @@
-import type { AuditEntry, CollectionQuery, JobRequest } from "@oboe/core";
+import type { AuditEntry, CollectionQuery, QueueableJob } from "@oboe/core";
 import type {
   AppliedRelationalMigration,
   RelationalDialect,
@@ -68,17 +68,38 @@ const oboeAuditLog = pgTable("oboe_audit_log", {
 const oboeJobOutbox = pgTable(
   "oboe_job_outbox",
   {
-    id: bigserial("id", { mode: "number" }).primaryKey(),
-    name: text("name").notNull(),
-    payload: jsonb("payload").notNull(),
-    idempotencyKey: text("idempotency_key"),
-    attempts: integer("attempts").notNull().default(1),
-    runAt: timestamp("run_at", {
+    id: text("id").primaryKey(),
+    taskSlug: text("task_slug").notNull(),
+    queue: text("queue").notNull(),
+    input: jsonb("input").notNull(),
+    output: jsonb("output"),
+    status: text("status").notNull(),
+    waitUntil: timestamp("wait_until", {
       mode: "string",
       withTimezone: true,
     })
       .notNull()
       .defaultNow(),
+    updatedAt: timestamp("updated_at", {
+      mode: "string",
+      withTimezone: true,
+    })
+      .notNull()
+      .defaultNow(),
+    startedAt: timestamp("started_at", {
+      mode: "string",
+      withTimezone: true,
+    }),
+    completedAt: timestamp("completed_at", {
+      mode: "string",
+      withTimezone: true,
+    }),
+    attempt: integer("attempt").notNull().default(0),
+    maxRetries: integer("max_retries").notNull().default(0),
+    idempotencyKey: text("idempotency_key"),
+    concurrencyKey: text("concurrency_key"),
+    lastError: text("last_error"),
+    log: jsonb("log").notNull().default(sql`'[]'::jsonb`),
     createdAt: timestamp("created_at", {
       mode: "string",
       withTimezone: true,
@@ -90,6 +111,12 @@ const oboeJobOutbox = pgTable(
     uniqueIndex("oboe_job_outbox_idempotency_idx")
       .on(table.idempotencyKey)
       .where(sql`${table.idempotencyKey} IS NOT NULL`),
+    index("oboe_job_outbox_status_wait_until_idx").on(
+      table.status,
+      table.waitUntil
+    ),
+    index("oboe_job_outbox_queue_created_at_idx").on(table.queue, table.createdAt),
+    index("oboe_job_outbox_concurrency_idx").on(table.concurrencyKey),
   ]
 );
 
@@ -175,18 +202,37 @@ CREATE TABLE IF NOT EXISTS oboe_audit_log (
 );`.trim(),
   `
 CREATE TABLE IF NOT EXISTS oboe_job_outbox (
-  id bigserial PRIMARY KEY,
-  name text NOT NULL,
-  payload jsonb NOT NULL,
+  id text PRIMARY KEY,
+  task_slug text NOT NULL,
+  queue text NOT NULL,
+  input jsonb NOT NULL,
+  output jsonb,
+  status text NOT NULL,
+  wait_until timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  started_at timestamptz,
+  completed_at timestamptz,
+  attempt integer NOT NULL DEFAULT 0,
+  max_retries integer NOT NULL DEFAULT 0,
   idempotency_key text,
-  attempts integer NOT NULL DEFAULT 1,
-  run_at timestamptz NOT NULL DEFAULT now(),
+  concurrency_key text,
+  last_error text,
+  log jsonb NOT NULL DEFAULT '[]'::jsonb,
   created_at timestamptz NOT NULL DEFAULT now()
 );`.trim(),
   `
 CREATE UNIQUE INDEX IF NOT EXISTS oboe_job_outbox_idempotency_idx
   ON oboe_job_outbox (idempotency_key)
   WHERE idempotency_key IS NOT NULL;`.trim(),
+  `
+CREATE INDEX IF NOT EXISTS oboe_job_outbox_status_wait_until_idx
+  ON oboe_job_outbox (status, wait_until);`.trim(),
+  `
+CREATE INDEX IF NOT EXISTS oboe_job_outbox_queue_created_at_idx
+  ON oboe_job_outbox (queue, created_at);`.trim(),
+  `
+CREATE INDEX IF NOT EXISTS oboe_job_outbox_concurrency_idx
+  ON oboe_job_outbox (concurrency_key);`.trim(),
   migrationTableStatement().sql,
 ].join("\n\n");
 
@@ -230,15 +276,27 @@ export const postgresDialect: RelationalDialect = {
         : builder.toSQL()
     );
   },
-  buildEnqueueJobStatement(job: JobRequest) {
+  buildEnqueueJobStatement(job: QueueableJob) {
     return toStatement(
       new PgInsertBuilder(oboeJobOutbox, session, dialect)
         .values({
-          attempts: job.attempts ?? 1,
+          attempt: 0,
+          completedAt: null,
+          concurrencyKey: job.concurrencyKey ?? null,
+          createdAt: sql`now()`,
+          id: job.id,
           idempotencyKey: job.idempotencyKey ?? null,
-          name: job.name,
-          payload: job.payload,
-          runAt: job.runAt ?? new Date().toISOString(),
+          input: job.input,
+          lastError: null,
+          log: job.log ?? [],
+          maxRetries: job.maxRetries,
+          output: null,
+          queue: job.queue,
+          startedAt: null,
+          status: job.status ?? "queued",
+          taskSlug: job.task,
+          updatedAt: sql`now()`,
+          waitUntil: job.waitUntil,
         })
         .onConflictDoNothing({
           target: oboeJobOutbox.idempotencyKey,
