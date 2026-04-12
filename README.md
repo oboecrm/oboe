@@ -37,6 +37,7 @@ OboeCRM is early, but the architecture is already shaped around the v1 concept:
 - `@oboe/storage-r2` is the official Cloudflare R2 provider for uploads
 - `@oboe/storage-s3` is the first official object storage provider for uploads
 - `@oboe/storage-vercel-blob` is the official Vercel Blob provider for uploads
+- `@oboe/plugin-form-builder` adds managed forms, public submission endpoints, and a Payload-like form builder UI
 - `@oboe/cli` owns schema migration and `db:push` workflows
 - `@oboe/jobs` handles retry-aware background work and webhook-style flows
 - `apps/studio` is the official Next.js shell for admin, API, and GraphQL
@@ -214,6 +215,7 @@ This repository is a `pnpm + Turborepo` monorepo.
 - [`packages/core`](./packages/core): config DSL, schema compiler, Local API, hooks, access, events
 - [`packages/storage-relational`](./packages/storage-relational): shared relational manifests, migrations, and storage behavior
 - [`packages/plugin-storage`](./packages/plugin-storage): low-level upload storage plugin and adapter contract
+- [`packages/plugin-form-builder`](./packages/plugin-form-builder): dynamic forms, submissions, and builder UI plugin
 - [`packages/storage-azure-blob`](./packages/storage-azure-blob): Azure Blob Storage provider
 - [`packages/storage-gcs`](./packages/storage-gcs): Google Cloud Storage provider
 - [`packages/storage-r2`](./packages/storage-r2): Cloudflare R2 provider wrapper
@@ -240,6 +242,7 @@ The current implementation already includes:
 - a shared relational storage layer with migration metadata
 - upload-enabled collections with pluggable object storage
 - low-level storage plugin and official S3 / R2 / GCS / Azure Blob / Vercel Blob providers
+- a form builder plugin with managed forms, submissions, public schema routes, and email notifications
 - official Postgres, MySQL, and SQLite adapters
 - an Oboe CLI for migration generation, apply, status, and `db:push`
 - generated admin collection screens

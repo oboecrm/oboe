@@ -56,6 +56,9 @@ importers:
       '@oboe/jobs':
         specifier: workspace:*
         version: link:../../packages/jobs
+      '@oboe/plugin-form-builder':
+        specifier: workspace:*
+        version: link:../../packages/plugin-form-builder
       '@oboe/storage-azure-blob':
         specifier: workspace:*
         version: link:../../packages/storage-azure-blob
@@ -222,6 +225,18 @@ importers:
       '@oboe/core':
         specifier: workspace:*
         version: link:../core
+
+  packages/plugin-form-builder:
+    dependencies:
+      '@oboe/core':
+        specifier: workspace:*
+        version: link:../core
+      '@oboe/http':
+        specifier: workspace:*
+        version: link:../http
+      react:
+        specifier: ^19.2.4
+        version: 19.2.4
 
   packages/plugin-mcp:
     dependencies:

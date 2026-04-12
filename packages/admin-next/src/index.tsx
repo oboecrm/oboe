@@ -307,11 +307,10 @@ export function CollectionListView(props: {
             flexWrap: "wrap",
           }}
         >
-          {getCollectionViewLinks(props.collection).map((view) => (
-            <a
-              href={`${basePath}/${props.collection.slug}?view=${view.key}`}
-              key={view.key}
-            >
+          {getCollectionViewLinks(props.collection, {
+            basePath,
+          }).map((view) => (
+            <a href={view.href} key={view.key}>
               {view.label}
             </a>
           ))}
@@ -349,9 +348,12 @@ export function CollectionListView(props: {
 }
 
 export function RecordDetailView(props: {
+  basePath?: string;
   collection: CompiledCollection;
   doc: OboeDocument;
 }) {
+  const basePath = props.basePath ?? "/admin";
+
   return (
     <div style={shellStyle}>
       <div style={panelStyle}>
@@ -364,6 +366,24 @@ export function RecordDetailView(props: {
               props.doc.id
           )}
         </h1>
+
+        <div
+          style={{
+            display: "flex",
+            gap: "12px",
+            marginBottom: "1.5rem",
+            flexWrap: "wrap",
+          }}
+        >
+          {getCollectionViewLinks(props.collection, {
+            basePath,
+            docId: props.doc.id,
+          }).map((view) => (
+            <a href={view.href} key={view.key}>
+              {view.label}
+            </a>
+          ))}
+        </div>
 
         <dl
           style={{
@@ -505,10 +525,34 @@ export function ActivityComposer() {
   );
 }
 
-export function getCollectionViewLinks(collection: CompiledCollection) {
-  return Object.entries(collection.admin?.views ?? {}).map(([key, view]) => ({
-    key,
-    label: view.label,
-    path: view.path,
-  }));
+function getCollectionViewLinksWithOptions(
+  collection: CompiledCollection,
+  options: {
+    basePath?: string;
+    docId?: string;
+  }
+) {
+  const basePath = options.basePath ?? "/admin";
+  const hrefBase = options.docId
+    ? `${basePath}/${collection.slug}/${options.docId}`
+    : `${basePath}/${collection.slug}`;
+
+  return Object.entries(collection.admin?.views ?? {})
+    .filter(([, view]) => options.docId || view.path !== "/builder")
+    .map(([key, view]) => ({
+      href: `${hrefBase}?view=${key}`,
+      key,
+      label: view.label,
+      path: view.path,
+    }));
+}
+
+export function getCollectionViewLinks(
+  collection: CompiledCollection,
+  options?: {
+    basePath?: string;
+    docId?: string;
+  }
+) {
+  return getCollectionViewLinksWithOptions(collection, options ?? {});
 }

@@ -4,6 +4,7 @@ import {
   type PluginConfig,
   type StorageServeMode,
 } from "@oboe/core";
+import { formBuilderPlugin } from "@oboe/plugin-form-builder";
 import { azureBlobStorage } from "@oboe/storage-azure-blob";
 import { gcsStorage } from "@oboe/storage-gcs";
 import { r2Storage } from "@oboe/storage-r2";
@@ -319,7 +320,7 @@ export default defineConfig({
       slug: "system",
     }),
   ],
-  plugins: storagePlugin ? [storagePlugin] : [],
+  plugins: [formBuilderPlugin(), ...(storagePlugin ? [storagePlugin] : [])],
   typescript: {
     outputFile: "./oboe-types.generated.ts",
   },

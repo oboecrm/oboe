@@ -105,6 +105,50 @@ export interface UsersInput {
 
 export type UsersUpdateInput = Partial<UsersInput>;
 
+export interface FormsDocument {
+  id: string;
+  createdAt: string;
+  updatedAt: string;
+  slug: string;
+  title: string;
+  status: "draft" | "published";
+  submitButtonLabel?: string;
+  confirmationType: "message" | "redirect";
+  confirmationMessage?: string;
+  redirectURL?: string;
+  fields: unknown;
+  emails?: unknown;
+}
+
+export interface FormsInput {
+  slug: string;
+  title: string;
+  status: "draft" | "published";
+  submitButtonLabel?: string;
+  confirmationType: "message" | "redirect";
+  confirmationMessage?: string;
+  redirectURL?: string;
+  fields: unknown;
+  emails?: unknown;
+}
+
+export type FormsUpdateInput = Partial<FormsInput>;
+
+export interface FormSubmissionsDocument {
+  id: string;
+  createdAt: string;
+  updatedAt: string;
+  form: string | FormsDocument;
+  submissionData: unknown;
+}
+
+export interface FormSubmissionsInput {
+  form: string | FormsDocument;
+  submissionData: unknown;
+}
+
+export type FormSubmissionsUpdateInput = Partial<FormSubmissionsInput>;
+
 export interface Collections {
   contacts: ContactsDocument;
   companies: CompaniesDocument;
@@ -112,6 +156,8 @@ export interface Collections {
   activities: ActivitiesDocument;
   media: MediaDocument;
   users: UsersDocument;
+  forms: FormsDocument;
+  "form-submissions": FormSubmissionsDocument;
 }
 
 export interface CollectionInputs {
@@ -121,6 +167,8 @@ export interface CollectionInputs {
   activities: ActivitiesInput;
   media: MediaInput;
   users: UsersInput;
+  forms: FormsInput;
+  "form-submissions": FormSubmissionsInput;
 }
 
 export type Globals = Record<string, never>;

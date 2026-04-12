@@ -7,6 +7,7 @@
     "dev": "pnpm generate:types && next dev",
     "generate:types": "node ../../packages/cli/dist/cli.js generate:types --config ./oboe.config.ts",
     "lint": "pnpm generate:types && tsc -p tsconfig.json --noEmit",
+    "test": "pnpm generate:types && vitest run",
     "typecheck": "pnpm generate:types && tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
@@ -16,6 +17,7 @@
     "@oboe/graphql": "workspace:*",
     "@oboe/http": "workspace:*",
     "@oboe/jobs": "workspace:*",
+    "@oboe/plugin-form-builder": "workspace:*",
     "@oboe/storage-azure-blob": "workspace:*",
     "@oboe/storage-gcs": "workspace:*",
     "@oboe/storage-r2": "workspace:*",
