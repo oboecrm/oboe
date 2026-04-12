@@ -7,6 +7,7 @@ import type {
   StorageAdapterFactory,
   StorageServeMode,
 } from "@oboe/core";
+import { mapCollections } from "@oboe/core";
 
 export type {
   CollectionStorageConfig,
@@ -56,17 +57,11 @@ export function storagePlugin(options: StoragePluginOptions): PluginConfig {
         return config;
       }
 
-      return {
-        ...config,
-        modules: config.modules.map((moduleConfig) => ({
-          ...moduleConfig,
-          collections: moduleConfig.collections.map((collection) => {
-            const option = options.collections[collection.slug];
+      return mapCollections(config, (collection) => {
+        const option = options.collections[collection.slug];
 
-            return option ? extendCollection(collection, option) : collection;
-          }),
-        })),
-      };
+        return option ? extendCollection(collection, option) : collection;
+      });
     },
     name: "@oboe/plugin-storage",
   };

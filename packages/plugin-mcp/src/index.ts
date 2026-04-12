@@ -21,6 +21,7 @@ import type {
   SelectFieldOption,
   SelectShape,
 } from "@oboe/core";
+import { appendHttpRoutes, appendModules } from "@oboe/core";
 import * as z from "zod/v4";
 
 export type {
@@ -1588,25 +1589,19 @@ export function mcpPlugin(options: McpPluginOptions): PluginConfig {
       ensureSlugIsAvailable(config, apiKeyCollectionSlug, "collection");
       ensureSlugIsAvailable(config, MCP_MODULE_SLUG, "module");
 
-      return {
-        ...config,
-        http: {
-          ...config.http,
-          routes: [
-            ...(config.http?.routes ?? []),
-            createMcpRoute(route, options, apiKeyCollectionSlug),
-          ],
-        },
-        modules: [
-          ...config.modules,
+      return appendModules(
+        appendHttpRoutes(config, [
+          createMcpRoute(route, options, apiKeyCollectionSlug),
+        ]),
+        [
           {
             collections: [
               createApiKeyCollection(userCollection, apiKeyCollectionSlug),
             ],
             slug: MCP_MODULE_SLUG,
           },
-        ],
-      };
+        ]
+      );
     },
     name: "@oboe/plugin-mcp",
   };

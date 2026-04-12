@@ -4,6 +4,11 @@ import type {
   OboeRuntime,
   PluginConfig,
 } from "@oboe/core";
+import {
+  appendHttpRoutes,
+  appendModules,
+  mergeCollectionConfig,
+} from "@oboe/core";
 
 import { sendPreparedEmails } from "./email.js";
 import {
@@ -59,36 +64,6 @@ async function parseJsonRequest(request: Request) {
   } catch {
     return null;
   }
-}
-
-function mergeCollectionConfig(
-  base: CollectionConfig,
-  override: Partial<CollectionConfig> | undefined
-): CollectionConfig {
-  if (!override) {
-    return base;
-  }
-
-  return {
-    ...base,
-    ...override,
-    access: {
-      ...base.access,
-      ...override.access,
-    },
-    admin: {
-      ...base.admin,
-      ...override.admin,
-      views: {
-        ...base.admin?.views,
-        ...override.admin?.views,
-      },
-    },
-    hooks: {
-      ...base.hooks,
-      ...override.hooks,
-    },
-  };
 }
 
 function createFormsCollection(args: {
@@ -292,146 +267,140 @@ export function formBuilderPlugin(
         submissionSlug,
       });
 
-      return {
-        ...config,
-        http: {
-          ...config.http,
-          routes: [
-            ...(config.http?.routes ?? []),
-            {
-              async handler(request, { runtime }) {
-                const url = new URL(request.url);
-                const slug = url.searchParams.get("slug")?.trim();
+      return appendModules(
+        appendHttpRoutes(config, [
+          {
+            async handler(request, { runtime }) {
+              const url = new URL(request.url);
+              const slug = url.searchParams.get("slug")?.trim();
 
-                if (!slug) {
-                  return json(
-                    {
-                      error: "Missing required query param `slug`.",
-                    },
-                    400
-                  );
-                }
-
-                const form = await findPublishedForm({
-                  allowedFieldTypes,
-                  formSlug,
-                  runtime,
-                  slug,
-                });
-
-                if (!form) {
-                  return json(
-                    {
-                      error: `Published form "${slug}" was not found.`,
-                    },
-                    404
-                  );
-                }
-
-                return json(toPublicFormDocument(form));
-              },
-              method: "GET",
-              path: `${routeBase}/form`,
-            },
-            {
-              async handler(request, { runtime }) {
-                const body = await parseJsonRequest(request);
-
-                if (!body) {
-                  return json(
-                    {
-                      error: "Request body must be valid JSON.",
-                    },
-                    400
-                  );
-                }
-
-                const formName =
-                  typeof body.form === "string" ? body.form.trim() : "";
-                const submissionData =
-                  typeof body.submissionData === "object" &&
-                  body.submissionData !== null &&
-                  !Array.isArray(body.submissionData)
-                    ? (body.submissionData as Record<string, unknown>)
-                    : null;
-
-                if (!formName || !submissionData) {
-                  return json(
-                    {
-                      error:
-                        "Request body must include `form` and `submissionData`.",
-                    },
-                    400
-                  );
-                }
-
-                const form = await findPublishedForm({
-                  allowedFieldTypes,
-                  formSlug,
-                  runtime,
-                  slug: formName,
-                });
-
-                if (!form?.id) {
-                  return json(
-                    {
-                      error: `Published form "${formName}" was not found.`,
-                    },
-                    404
-                  );
-                }
-
-                const validated = validateSubmissionData({
-                  form,
-                  submissionData,
-                });
-
-                if (validated.issues.length > 0) {
-                  return json(
-                    {
-                      error: "Validation failed",
-                      issues: validated.issues,
-                    },
-                    400
-                  );
-                }
-
-                await runtime.create({
-                  collection: submissionSlug,
-                  data: {
-                    form: form.id,
-                    submissionData: validated.value,
+              if (!slug) {
+                return json(
+                  {
+                    error: "Missing required query param `slug`.",
                   },
-                  overrideAccess: true,
-                  req: request,
-                });
+                  400
+                );
+              }
 
-                await sendPreparedEmails({
-                  form,
-                  options,
-                  req: request,
-                  runtime,
-                  submissionData: validated.value,
-                });
+              const form = await findPublishedForm({
+                allowedFieldTypes,
+                formSlug,
+                runtime,
+                slug,
+              });
 
-                return json({
-                  ok: true,
-                  ...buildConfirmationPayload(form),
-                });
-              },
-              method: "POST",
-              path: `${routeBase}/submit`,
+              if (!form) {
+                return json(
+                  {
+                    error: `Published form "${slug}" was not found.`,
+                  },
+                  404
+                );
+              }
+
+              return json(toPublicFormDocument(form));
             },
-          ],
-        },
-        modules: [
-          ...config.modules,
+            method: "GET",
+            path: `${routeBase}/form`,
+          },
+          {
+            async handler(request, { runtime }) {
+              const body = await parseJsonRequest(request);
+
+              if (!body) {
+                return json(
+                  {
+                    error: "Request body must be valid JSON.",
+                  },
+                  400
+                );
+              }
+
+              const formName =
+                typeof body.form === "string" ? body.form.trim() : "";
+              const submissionData =
+                typeof body.submissionData === "object" &&
+                body.submissionData !== null &&
+                !Array.isArray(body.submissionData)
+                  ? (body.submissionData as Record<string, unknown>)
+                  : null;
+
+              if (!formName || !submissionData) {
+                return json(
+                  {
+                    error:
+                      "Request body must include `form` and `submissionData`.",
+                  },
+                  400
+                );
+              }
+
+              const form = await findPublishedForm({
+                allowedFieldTypes,
+                formSlug,
+                runtime,
+                slug: formName,
+              });
+
+              if (!form?.id) {
+                return json(
+                  {
+                    error: `Published form "${formName}" was not found.`,
+                  },
+                  404
+                );
+              }
+
+              const validated = validateSubmissionData({
+                form,
+                submissionData,
+              });
+
+              if (validated.issues.length > 0) {
+                return json(
+                  {
+                    error: "Validation failed",
+                    issues: validated.issues,
+                  },
+                  400
+                );
+              }
+
+              await runtime.create({
+                collection: submissionSlug,
+                data: {
+                  form: form.id,
+                  submissionData: validated.value,
+                },
+                overrideAccess: true,
+                req: request,
+              });
+
+              await sendPreparedEmails({
+                form,
+                options,
+                req: request,
+                runtime,
+                submissionData: validated.value,
+              });
+
+              return json({
+                ok: true,
+                ...buildConfirmationPayload(form),
+              });
+            },
+            method: "POST",
+            path: `${routeBase}/submit`,
+          },
+        ]),
+        [
           {
             collections: [formsCollection, submissionsCollection],
             slug: FORM_BUILDER_MODULE_SLUG,
           },
-        ],
-      };
+        ]
+      );
     },
     name: "@oboe/plugin-form-builder",
   };

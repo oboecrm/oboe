@@ -7,6 +7,19 @@ import {
   paginateDocuments,
   sortRecords,
 } from "./query.js";
+import { normalizeEmailMessage } from "./runtime/email-utils.js";
+import { countCollectionOperation } from "./runtime/operations/count.js";
+import { createCollectionOperation } from "./runtime/operations/create.js";
+import { deleteCollectionOperation } from "./runtime/operations/delete.js";
+import { findCollectionOperation } from "./runtime/operations/find.js";
+import { findByIdCollectionOperation } from "./runtime/operations/findById.js";
+import { updateCollectionOperation } from "./runtime/operations/update.js";
+import {
+  cloneGlobalRecord,
+  cloneRecord,
+  toPublicDocument,
+  toPublicGlobalDocument,
+} from "./runtime/record-utils.js";
 import {
   compileSchema,
   getCompiledCollection,
@@ -40,7 +53,6 @@ import type {
   JobRequest,
   OboeConfig,
   OboeDocument,
-  OboeGlobalDocument,
   OboeGlobalRecord,
   OboeRecord,
   OboeRuntime,
@@ -52,7 +64,6 @@ import type {
   SchemaParseFailure,
   SchemaParseResult,
   SelectShape,
-  SendEmailOptions,
   StandardSchemaIssue,
   StandardSchemaLike,
   StoredFileData,
@@ -1773,7 +1784,7 @@ async function uploadCollectionFile(args: {
 
 async function cleanupUploadedFile(args: {
   collection: CollectionConfig;
-  file: StoredFileData | null;
+  file?: StoredFileData | null;
   req?: Request;
   user?: unknown;
 }) {
@@ -2193,55 +2204,6 @@ async function prepareValidatedGlobalData(args: {
   return candidateData;
 }
 
-function toPublicDocument(record: OboeRecord): OboeDocument {
-  return {
-    ...record.data,
-    createdAt: record.createdAt,
-    id: record.id,
-    updatedAt: record.updatedAt,
-  };
-}
-
-function toPublicGlobalDocument(record: OboeGlobalRecord): OboeGlobalDocument {
-  return {
-    ...record.data,
-    createdAt: record.createdAt,
-    updatedAt: record.updatedAt,
-  };
-}
-
-function cloneRecord(record: OboeRecord): OboeRecord {
-  return {
-    ...record,
-    data: structuredClone(record.data),
-  };
-}
-
-function cloneGlobalRecord(record: OboeGlobalRecord): OboeGlobalRecord {
-  return {
-    ...record,
-    data: structuredClone(record.data),
-  };
-}
-
-function normalizeEmailMessage(args: {
-  defaultFromAddress: string;
-  defaultFromName: string;
-  message: SendEmailOptions;
-}): SendEmailOptions {
-  if (args.message.from) {
-    return args.message;
-  }
-
-  return {
-    ...args.message,
-    from: {
-      address: args.defaultFromAddress,
-      name: args.defaultFromName,
-    },
-  };
-}
-
 export function createOboeRuntime(args: {
   config: OboeConfig;
   db: DatabaseAdapter;
@@ -2459,6 +2421,43 @@ export function createOboeRuntime(args: {
     }
   };
 
+  const getCollectionOperationDeps = () => ({
+    canAccess,
+    cleanupUploadedFile,
+    cloneRecord,
+    collectionHookBase,
+    countRecords,
+    db: args.db,
+    events,
+    filterRecords,
+    getStoredFileData,
+    loadVisibleRecord,
+    materializeDocument,
+    paginateDocuments,
+    prepareValidatedData: (operationArgs: {
+      collection: CollectionConfig;
+      context: HookContext;
+      data: Record<string, unknown>;
+      file?: UploadInputFile;
+      operation: "create" | "update";
+      originalDoc?: OboeRecord | null;
+      req?: Request;
+      user?: unknown;
+    }) =>
+      prepareValidatedData({
+        ...operationArgs,
+        db: args.db,
+        oboe: runtime,
+      }),
+    runAfterChange,
+    runCollectionAfterOperation,
+    runCollectionBeforeOperation,
+    runCollectionReadPipeline,
+    runFieldHookPhase,
+    runtime,
+    uploadCollectionFile,
+  });
+
   runtime = {
     auth: {
       collection() {
@@ -2496,26 +2495,16 @@ export function createOboeRuntime(args: {
       req?: Request;
       user?: unknown;
     }) {
-      const { collection, overrideAccess, query, req, user } = callArgs;
-      const collectionConfig = getCompiledCollection(schema, collection);
+      const collectionConfig = getCompiledCollection(
+        schema,
+        callArgs.collection
+      );
 
-      if (
-        !(await canAccess({
-          collection: collectionConfig,
-          operation: "read",
-          overrideAccess,
-          req,
-          user,
-        }))
-      ) {
-        throw new Error(`Access denied for read on "${collection}".`);
-      }
-
-      const records = await args.db.find({
-        collection,
+      return await countCollectionOperation({
+        callArgs,
+        collectionConfig,
+        deps: getCollectionOperationDeps(),
       });
-
-      return countRecords(filterRecords(records, { where: query?.where }));
     },
     async create<TSlug extends string>(callArgs: {
       collection: TSlug;
@@ -2527,156 +2516,18 @@ export function createOboeRuntime(args: {
       select?: SelectShape;
       user?: unknown;
     }): Promise<CollectionDocumentForSlug<GeneratedTypes, TSlug>> {
-      const {
-        collection,
-        data,
-        depth,
-        file,
-        overrideAccess,
-        req,
-        select,
-        user,
-      } = callArgs;
-      const collectionConfig = getCompiledCollection(schema, collection);
-      const context = getOrCreateHookContext(req);
-      const operationArgs: Record<string, unknown> = {
-        collection,
-        data,
-        depth,
-        file,
-        overrideAccess,
-        select,
-      };
+      const collectionConfig = getCompiledCollection(
+        schema,
+        callArgs.collection
+      );
+      const context = getOrCreateHookContext(callArgs.req);
 
-      if (
-        !(await canAccess({
-          collection: collectionConfig,
-          data,
-          operation: "create",
-          overrideAccess,
-          req,
-          user,
-        }))
-      ) {
-        throw new Error(
-          `Access denied for create on "${collectionConfig.slug}".`
-        );
-      }
-
-      await runCollectionBeforeOperation({
-        collection: collectionConfig,
+      return await createCollectionOperation({
+        callArgs,
+        collectionConfig,
         context,
-        hookArgs: operationArgs,
-        oboe: runtime,
-        operation: "create",
-        req,
-        user,
+        deps: getCollectionOperationDeps(),
       });
-
-      const candidateData = await prepareValidatedData({
-        context,
-        collection: collectionConfig,
-        data,
-        db: args.db,
-        file,
-        oboe: runtime,
-        operation: "create",
-        req,
-        user,
-      });
-      const uploadedFile = await uploadCollectionFile({
-        collection: collectionConfig,
-        data: candidateData,
-        file,
-        req,
-        user,
-      });
-      let created: OboeRecord;
-      try {
-        created = await args.db.create({
-          collection,
-          data: uploadedFile
-            ? {
-                ...candidateData,
-                file: uploadedFile,
-              }
-            : candidateData,
-        });
-      } catch (error) {
-        await cleanupUploadedFile({
-          collection: collectionConfig,
-          file: uploadedFile,
-          req,
-          user,
-        });
-        throw error;
-      }
-      created = cloneRecord(created);
-      await runFieldHookPhase({
-        collection: collectionConfig,
-        context,
-        data: created.data,
-        fields: collectionConfig.fields,
-        hookName: "afterChange",
-        oboe: runtime,
-        operation: "create",
-        req,
-        user,
-      });
-      const doc = await runAfterChange({
-        context,
-        collection: collectionConfig,
-        doc: created,
-        oboe: runtime,
-        operation: "create",
-        req,
-        user,
-      });
-
-      await args.db.recordAudit?.({
-        actor: user,
-        at: new Date().toISOString(),
-        collection,
-        id: doc.id,
-        operation: "create",
-        payload: doc.data,
-      });
-      await events.emit(`${collection}.created`, {
-        collection,
-        id: doc.id,
-      });
-
-      const readable = await runCollectionReadPipeline({
-        collection: collectionConfig,
-        context,
-        doc,
-        oboe: runtime,
-        operation: "create",
-        req,
-        user,
-      });
-
-      const result = await materializeDocument({
-        collectionSlug: collection,
-        context,
-        depth,
-        overrideAccess,
-        record: readable,
-        req,
-        select,
-        user,
-      });
-
-      return (await runCollectionAfterOperation({
-        collection: collectionConfig,
-        context,
-        hookArgs: operationArgs,
-        oboe: runtime,
-        operation: "create",
-        req,
-        result,
-        user,
-      })) as CollectionDocumentForSlug<GeneratedTypes, TSlug>;
     },
     db: args.db,
     async delete<TSlug extends string>(callArgs: {
@@ -2688,128 +2539,18 @@ export function createOboeRuntime(args: {
       select?: SelectShape;
       user?: unknown;
     }): Promise<CollectionDocumentForSlug<GeneratedTypes, TSlug> | null> {
-      const { collection, depth, id, overrideAccess, req, select, user } =
-        callArgs;
-      const collectionConfig = getCompiledCollection(schema, collection);
-      const context = getOrCreateHookContext(req);
-      const operationArgs: Record<string, unknown> = {
-        collection,
-        depth,
-        id,
-        overrideAccess,
-        select,
-      };
+      const collectionConfig = getCompiledCollection(
+        schema,
+        callArgs.collection
+      );
+      const context = getOrCreateHookContext(callArgs.req);
 
-      if (
-        !(await canAccess({
-          collection: collectionConfig,
-          id,
-          operation: "delete",
-          overrideAccess,
-          req,
-          user,
-        }))
-      ) {
-        throw new Error(`Access denied for delete on "${collection}".`);
-      }
-
-      await runCollectionBeforeOperation({
-        collection: collectionConfig,
+      return await deleteCollectionOperation({
+        callArgs,
+        collectionConfig,
         context,
-        hookArgs: operationArgs,
-        oboe: runtime,
-        operation: "delete",
-        req,
-        user,
+        deps: getCollectionOperationDeps(),
       });
-
-      let existing = await args.db.findById({
-        collection,
-        id,
-      });
-      existing = existing ? cloneRecord(existing) : null;
-      if (existing) {
-        for (const hook of collectionConfig.hooks?.beforeDelete ?? []) {
-          existing = await hook({
-            ...collectionHookBase({
-              collection: collectionConfig,
-              context,
-              oboe: runtime,
-              operation: "delete",
-              req,
-              user,
-            }),
-            doc: existing,
-          });
-        }
-      }
-
-      let doc = await args.db.delete({
-        collection,
-        id,
-      });
-
-      if (doc) {
-        doc = cloneRecord(doc);
-        for (const hook of collectionConfig.hooks?.afterDelete ?? []) {
-          doc = await hook({
-            ...collectionHookBase({
-              collection: collectionConfig,
-              context,
-              oboe: runtime,
-              operation: "delete",
-              req,
-              user,
-            }),
-            doc,
-          });
-        }
-
-        try {
-          await cleanupUploadedFile({
-            collection: collectionConfig,
-            file: getStoredFileData(doc.data.file),
-            req,
-            user,
-          });
-        } catch (error) {
-          console.error(error);
-        }
-
-        await args.db.recordAudit?.({
-          actor: user,
-          at: new Date().toISOString(),
-          collection,
-          id,
-          operation: "delete",
-          payload: doc.data,
-        });
-        await events.emit(`${collection}.deleted`, { collection, id });
-      }
-
-      const result = doc
-        ? await materializeDocument({
-            collectionSlug: collection,
-            context,
-            depth,
-            overrideAccess,
-            record: doc,
-            req,
-            select,
-            user,
-          })
-        : null;
-
-      return (await runCollectionAfterOperation({
-        collection: collectionConfig,
-        context,
-        hookArgs: operationArgs,
-        oboe: runtime,
-        operation: "delete",
-        req,
-        result,
-        user,
-      })) as CollectionDocumentForSlug<GeneratedTypes, TSlug> | null;
     },
     email: {
       getClient<T = unknown>(name: string): T | undefined {
@@ -2824,93 +2565,18 @@ export function createOboeRuntime(args: {
       req?: Request;
       user?: unknown;
     }) {
-      const { collection, overrideAccess, query, req, user } = callArgs;
-      const collectionConfig = getCompiledCollection(schema, collection);
-      const context = getOrCreateHookContext(req);
-      const operationArgs: Record<string, unknown> = {
-        collection,
-        overrideAccess,
-        query,
-      };
+      const collectionConfig = getCompiledCollection(
+        schema,
+        callArgs.collection
+      );
+      const context = getOrCreateHookContext(callArgs.req);
 
-      if (
-        !(await canAccess({
-          collection: collectionConfig,
-          operation: "read",
-          overrideAccess,
-          req,
-          user,
-        }))
-      ) {
-        throw new Error(`Access denied for read on "${collection}".`);
-      }
-
-      await runCollectionBeforeOperation({
-        collection: collectionConfig,
+      return await findCollectionOperation({
+        callArgs,
+        collectionConfig,
         context,
-        hookArgs: operationArgs,
-        oboe: runtime,
-        operation: "read",
-        req,
-        user,
+        deps: getCollectionOperationDeps(),
       });
-
-      const records = filterRecords(
-        (
-          await args.db.find({
-            collection,
-          })
-        ).map((record: OboeRecord) => cloneRecord(record)),
-        query
-      );
-      const page = paginateDocuments(records, query);
-      const docs = await Promise.all(
-        page.docs.map(async (record) =>
-          materializeDocument({
-            collectionSlug: collection,
-            context,
-            depth: query?.depth,
-            overrideAccess,
-            record: await runCollectionReadPipeline({
-              collection: collectionConfig,
-              context,
-              doc: record,
-              oboe: runtime,
-              operation: "read",
-              req,
-              user,
-            }),
-            req,
-            select: query?.select,
-            user,
-          })
-        )
-      );
-
-      return (await runCollectionAfterOperation({
-        collection: collectionConfig,
-        context,
-        hookArgs: operationArgs,
-        oboe: runtime,
-        operation: "read",
-        req,
-        result: {
-          ...page,
-          docs,
-        },
-        user,
-      })) as {
-        docs: CollectionDocumentForSlug<GeneratedTypes, TSlug>[];
-        hasNextPage: boolean;
-        hasPrevPage: boolean;
-        limit: number;
-        nextPage: number | null;
-        page: number;
-        pagingCounter: number;
-        prevPage: number | null;
-        totalDocs: number;
-        totalPages: number;
-      };
     },
     async findById<TSlug extends string>(callArgs: {
       collection: TSlug;
@@ -2921,62 +2587,18 @@ export function createOboeRuntime(args: {
       select?: SelectShape;
       user?: unknown;
     }): Promise<CollectionDocumentForSlug<GeneratedTypes, TSlug> | null> {
-      const { collection, depth, id, overrideAccess, req, select, user } =
-        callArgs;
-      const context = getOrCreateHookContext(req);
-      const collectionConfig = getCompiledCollection(schema, collection);
-      const operationArgs: Record<string, unknown> = {
-        collection,
-        depth,
-        id,
-        overrideAccess,
-        select,
-      };
+      const context = getOrCreateHookContext(callArgs.req);
+      const collectionConfig = getCompiledCollection(
+        schema,
+        callArgs.collection
+      );
 
-      await runCollectionBeforeOperation({
-        collection: collectionConfig,
+      return await findByIdCollectionOperation({
+        callArgs,
+        collectionConfig,
         context,
-        hookArgs: operationArgs,
-        oboe: runtime,
-        operation: "read",
-        req,
-        user,
+        deps: getCollectionOperationDeps(),
       });
-
-      const doc = await loadVisibleRecord({
-        collectionSlug: collection,
-        context,
-        id,
-        overrideAccess,
-        req,
-        user,
-      });
-
-      if (!doc) {
-        return null;
-      }
-
-      const result = await materializeDocument({
-        collectionSlug: collection,
-        context,
-        depth,
-        overrideAccess,
-        record: doc,
-        req,
-        select,
-        user,
-      });
-
-      return (await runCollectionAfterOperation({
-        collection: collectionConfig,
-        context,
-        hookArgs: operationArgs,
-        oboe: runtime,
-        operation: "read",
-        req,
-        result,
-        user,
-      })) as CollectionDocumentForSlug<GeneratedTypes, TSlug> | null;
     },
     async findGlobal<TSlug extends string>(callArgs: {
       req?: Request;
@@ -3087,185 +2709,18 @@ export function createOboeRuntime(args: {
       select?: SelectShape;
       user?: unknown;
     }): Promise<CollectionDocumentForSlug<GeneratedTypes, TSlug> | null> {
-      const {
-        collection,
-        data,
-        depth,
-        file,
-        id,
-        overrideAccess,
-        req,
-        select,
-        user,
-      } = callArgs;
-      const collectionConfig = getCompiledCollection(schema, collection);
-      const context = getOrCreateHookContext(req);
-      const operationArgs: Record<string, unknown> = {
-        collection,
-        data,
-        depth,
-        file,
-        id,
-        overrideAccess,
-        select,
-      };
+      const collectionConfig = getCompiledCollection(
+        schema,
+        callArgs.collection
+      );
+      const context = getOrCreateHookContext(callArgs.req);
 
-      if (
-        !(await canAccess({
-          collection: collectionConfig,
-          data,
-          id,
-          operation: "update",
-          overrideAccess,
-          req,
-          user,
-        }))
-      ) {
-        throw new Error(`Access denied for update on "${collection}".`);
-      }
-
-      await runCollectionBeforeOperation({
-        collection: collectionConfig,
+      return await updateCollectionOperation({
+        callArgs,
+        collectionConfig,
         context,
-        hookArgs: operationArgs,
-        oboe: runtime,
-        operation: "update",
-        req,
-        user,
+        deps: getCollectionOperationDeps(),
       });
-
-      const existingRecord = await args.db.findById({ collection, id });
-      const existing = existingRecord ? cloneRecord(existingRecord) : null;
-      const candidateData = await prepareValidatedData({
-        context,
-        collection: collectionConfig,
-        data,
-        db: args.db,
-        file,
-        oboe: runtime,
-        operation: "update",
-        originalDoc: existing,
-        req,
-        user,
-      });
-      const previousFile = getStoredFileData(existing?.data.file);
-      const uploadedFile = await uploadCollectionFile({
-        collection: collectionConfig,
-        data: candidateData,
-        file,
-        req,
-        user,
-      });
-      let updated: OboeRecord | null;
-      try {
-        updated = await args.db.update({
-          collection,
-          data: uploadedFile
-            ? {
-                ...candidateData,
-                file: uploadedFile,
-              }
-            : candidateData,
-          id,
-        });
-      } catch (error) {
-        await cleanupUploadedFile({
-          collection: collectionConfig,
-          file: uploadedFile,
-          req,
-          user,
-        });
-        throw error;
-      }
-
-      if (!updated) {
-        await cleanupUploadedFile({
-          collection: collectionConfig,
-          file: uploadedFile,
-          req,
-          user,
-        });
-        return null;
-      }
-      updated = cloneRecord(updated);
-
-      if (uploadedFile && previousFile) {
-        try {
-          await cleanupUploadedFile({
-            collection: collectionConfig,
-            file: previousFile,
-            req,
-            user,
-          });
-        } catch (error) {
-          console.error(error);
-        }
-      }
-
-      await runFieldHookPhase({
-        collection: collectionConfig,
-        context,
-        data: updated.data,
-        fields: collectionConfig.fields,
-        hookName: "afterChange",
-        oboe: runtime,
-        operation: "update",
-        originalDoc: existing,
-        req,
-        user,
-      });
-      const doc = await runAfterChange({
-        context,
-        collection: collectionConfig,
-        doc: updated,
-        oboe: runtime,
-        operation: "update",
-        originalDoc: existing,
-        req,
-        user,
-      });
-
-      await args.db.recordAudit?.({
-        actor: user,
-        at: new Date().toISOString(),
-        collection,
-        id,
-        operation: "update",
-        payload: doc.data,
-      });
-      await events.emit(`${collection}.updated`, { collection, id });
-
-      const readable = await runCollectionReadPipeline({
-        collection: collectionConfig,
-        context,
-        doc,
-        oboe: runtime,
-        operation: "update",
-        req,
-        user,
-      });
-
-      const result = await materializeDocument({
-        collectionSlug: collection,
-        context,
-        depth,
-        overrideAccess,
-        record: readable,
-        req,
-        select,
-        user,
-      });
-
-      return (await runCollectionAfterOperation({
-        collection: collectionConfig,
-        context,
-        hookArgs: operationArgs,
-        oboe: runtime,
-        operation: "update",
-        req,
-        result,
-        user,
-      })) as CollectionDocumentForSlug<GeneratedTypes, TSlug> | null;
     },
     async updateGlobal<TSlug extends string>(callArgs: {
       data: GlobalInputForSlug<GeneratedTypes, TSlug>;

@@ -4,47 +4,19 @@ import {
   RecordCreateView,
   RecordDetailView,
 } from "@oboe/admin-next";
-import type { FieldConfig } from "@oboe/core";
-import {
-  FORM_BUILDER_VIEW_KEY,
-  getFormBuilderMetadata,
-  normalizeBuilderPayload,
-} from "@oboe/plugin-form-builder";
+import { FORM_BUILDER_VIEW_KEY } from "@oboe/plugin-form-builder";
 import { notFound, redirect } from "next/navigation";
 
+import {
+  createBuilderRecord,
+  createGeneratedRecord,
+  findAdminRecord,
+  findAdminRecords,
+  updateBuilderRecord,
+} from "../../../lib/admin/record-actions";
+import { resolveCollectionAdminView } from "../../../lib/admin/views";
 import { resolveAdminComponent } from "../../../lib/admin-components";
 import { getStudioRuntime } from "../../../lib/runtime";
-
-function parseFieldValue(field: FieldConfig, formData: FormData) {
-  if (field.type === "boolean") {
-    return formData.get(field.name) === "true";
-  }
-
-  const rawValue = formData.get(field.name);
-  if (typeof rawValue !== "string") {
-    return undefined;
-  }
-
-  const value = rawValue.trim();
-  if (!value) {
-    return undefined;
-  }
-
-  if (field.type === "number") {
-    const parsed = Number(value);
-    if (Number.isNaN(parsed)) {
-      return undefined;
-    }
-
-    return parsed;
-  }
-
-  if (field.type === "json") {
-    return JSON.parse(value) as unknown;
-  }
-
-  return value;
-}
 
 function SetupError(props: { message: string }) {
   return (
@@ -80,18 +52,8 @@ export default async function AdminPage(props: {
     if (!collection) {
       notFound();
     }
-    const selectedView = Array.isArray(searchParams.view)
-      ? searchParams.view[0]
-      : searchParams.view;
-    const customView = selectedView
-      ? collection.admin?.views?.[selectedView]
-      : undefined;
-    const builderView = collection.admin?.views?.[FORM_BUILDER_VIEW_KEY];
-    const builderMetadata = getFormBuilderMetadata(collection);
-
-    if (selectedView && !customView && selectedView !== FORM_BUILDER_VIEW_KEY) {
-      notFound();
-    }
+    const { builderMetadata, builderView, customView, selectedView } =
+      resolveCollectionAdminView(collection, searchParams);
 
     if (segments[1] === "new") {
       if (
@@ -110,26 +72,12 @@ export default async function AdminPage(props: {
             throw new Error("Missing form builder payload.");
           }
 
-          const { runtime } = await getStudioRuntime();
-          const runtimeCollection = runtime.schema.collections.get(
-            collection.slug
-          );
-
-          if (!runtimeCollection) {
-            throw new Error(`Unknown collection "${collection.slug}".`);
-          }
-
-          const doc = await runtime.create({
-            collection: runtimeCollection.slug,
-            data: normalizeBuilderPayload(
-              payload,
-              builderMetadata.allowedFieldTypes
-            ) as unknown as Record<string, unknown>,
-            overrideAccess: true,
-          });
-
           redirect(
-            `/admin/${runtimeCollection.slug}/${doc.id}?view=${FORM_BUILDER_VIEW_KEY}`
+            await createBuilderRecord({
+              collection,
+              metadata: builderMetadata,
+              payload,
+            })
           );
         };
 
@@ -146,29 +94,12 @@ export default async function AdminPage(props: {
       const createRecord = async (formData: FormData) => {
         "use server";
 
-        const { runtime } = await getStudioRuntime();
-        const runtimeCollection = runtime.schema.collections.get(
-          collection.slug
-        );
-
-        if (!runtimeCollection) {
-          throw new Error(`Unknown collection "${collection.slug}".`);
-        }
-
-        const data = Object.fromEntries(
-          runtimeCollection.fields.flatMap((field) => {
-            const value = parseFieldValue(field, formData);
-
-            return value === undefined ? [] : [[field.name, value]];
+        redirect(
+          await createGeneratedRecord({
+            collection,
+            formData,
           })
         );
-        const doc = await runtime.create({
-          collection: runtimeCollection.slug,
-          data,
-          overrideAccess: true,
-        });
-
-        redirect(`/admin/${runtimeCollection.slug}/${doc.id}`);
       };
 
       return (
@@ -177,10 +108,10 @@ export default async function AdminPage(props: {
     }
 
     if (segments[1]) {
-      const doc = await runtime.findById({
-        collection: collection.slug,
+      const doc = await findAdminRecord({
+        collectionSlug: collection.slug,
         id: segments[1],
-        overrideAccess: true,
+        runtime,
       });
       if (!doc) {
         notFound();
@@ -200,19 +131,13 @@ export default async function AdminPage(props: {
                   throw new Error("Missing form builder payload.");
                 }
 
-                const { runtime } = await getStudioRuntime();
-                await runtime.update({
-                  collection: collection.slug,
-                  data: normalizeBuilderPayload(
-                    payload,
-                    builderMetadata.allowedFieldTypes
-                  ) as unknown as Partial<Record<string, unknown>>,
-                  id: doc.id,
-                  overrideAccess: true,
-                });
-
                 redirect(
-                  `/admin/${collection.slug}/${doc.id}?view=${FORM_BUILDER_VIEW_KEY}`
+                  await updateBuilderRecord({
+                    collectionSlug: collection.slug,
+                    docId: doc.id,
+                    metadata: builderMetadata,
+                    payload,
+                  })
                 );
               }
             : undefined;
@@ -233,9 +158,9 @@ export default async function AdminPage(props: {
       );
     }
 
-    const result = await runtime.find({
-      collection: collection.slug,
-      overrideAccess: true,
+    const result = await findAdminRecords({
+      collectionSlug: collection.slug,
+      runtime,
     });
 
     if (customView) {
